@@ -74,6 +74,9 @@ strip = true
 [target."cfg(windows)".dependencies]
 tauri-winrt-notification = "0.8.1"
 winreg = "0.56.0"
+# Windows' own media sessions (music.rs): the player and the track it plays,
+# a browser's page too. Already in the tree, under Tauri.
+windows = { version = "0.62", features = ["Media_Control", "Foundation", "Win32_System_Com", "std"] }
 # WebView2's ProcessFailed: her pages' renderer gone (crash/win.rs); both
 # already in the tree, under Tauri.
 webview2-com = "0.39"

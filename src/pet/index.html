@@ -2,9 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <!-- A letter's pictures are its sender's (settings.js mailBodyHTML): the
+         frame they are drawn in is of this page's origin and inherits this
+         policy, so pictures from http and https are allowed for it here (its
+         own policy, in the frame, allows nothing but pictures and styles).
+         Scripts stay this page's own. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: http://asset.localhost asset: https://codex-pets.net; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      content="default-src 'self'; img-src 'self' data: blob: http://asset.localhost asset: https://codex-pets.net https: http:; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'"
     />
     <title>wakuwaku</title>
     <link rel="stylesheet" href="style.css" />
@@ -42,6 +47,7 @@
     <script src="status.js"></script>
     <script src="widgets.js"></script>
     <script src="deskgrid.js"></script>
+    <script src="calweek.js"></script>
     <script src="capsule.js"></script>
     <script src="placing.js"></script>
     <script src="wcards.js"></script>

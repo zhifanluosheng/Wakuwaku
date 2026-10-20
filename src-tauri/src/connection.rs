@@ -1184,6 +1184,330 @@ pub fn write_zcode_hooks(action: &str) -> Result<(), String> {
     }
 }
 
+// --- Trae CN: hooks in ~/.trae-cn/hooks.json --------------------------------
+//
+// Trae CN (ByteDance's AI IDE) runs its hooks from ~/.trae-cn/hooks.json in
+// Claude Code's shape ({ matcher, hooks: [{ type, command }] }), for six
+// events: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop and
+// Notification (no SessionEnd, no PermissionRequest). Its Windows sandbox
+// hands the command through a native argument that splits quoted paths, so
+// the command is a quote-free powershell -EncodedCommand carrying
+// `& '<her exe>' --wakuwaku-trae-hook`. The hooks must be enabled in Trae's
+// own Settings → Hooks (Global, Enable, Sandbox): no program can do that.
+// State only: every event prints {} and Trae asks its own permissions.
+pub const TRAE_FLAG: &str = "--wakuwaku-trae-hook";
+const TRAE_EVENTS: [&str; 6] = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification"];
+
+pub fn trae_hooks_file() -> PathBuf {
+    PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default())
+        .join(".trae-cn")
+        .join("hooks.json")
+}
+
+// Whether Trae CN is here: its folder, made as it first runs.
+pub fn trae_here() -> bool {
+    trae_hooks_file().parent().is_some_and(Path::is_dir)
+}
+
+// The command Trae runs: no quotes outside it (its sandbox), the exe's path
+// and the flag inside the encoded payload.
+fn trae_powershell(line: &str) -> String {
+    let bytes: Vec<u8> = line.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    use base64::Engine as _;
+    format!(
+        "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+pub fn trae_command() -> String {
+    trae_powershell(&format!("& '{}' {TRAE_FLAG}", launch_command()))
+}
+
+// Whether a hook is ours: the flag shows in the encoded payload (the outer
+// command cannot carry it as words).
+fn trae_hook_ours(h: &Value) -> bool {
+    let Some(cmd) = h.get("command").and_then(Value::as_str) else { return false };
+    if cmd.contains(TRAE_FLAG) {
+        return true;
+    }
+    let Some(token) = cmd.split("-EncodedCommand ").nth(1).map(|rest| rest.split_whitespace().next().unwrap_or("")) else {
+        return false;
+    };
+    if token.is_empty() {
+        return false;
+    }
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(token) else { return false };
+    if bytes.len() % 2 != 0 {
+        return false;
+    }
+    let line: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    String::from_utf16(&line).is_ok_and(|text| text.contains(TRAE_FLAG))
+}
+
+fn trae_group_ours(g: &Value) -> bool {
+    g.get("hooks").and_then(Value::as_array).is_some_and(|hs| hs.iter().any(trae_hook_ours))
+}
+
+pub fn trae_install(file: &Value, command: &str) -> Value {
+    let mut root = file.as_object().cloned().unwrap_or_default();
+    // Trae's schema is version 1; anything else is left as it is (not ours to
+    // rewrite), as the file is refused rather than mangled.
+    if root.get("version").is_none() {
+        root.insert("version".into(), json!(1));
+    }
+    let mut hooks = root.get("hooks").and_then(Value::as_object).cloned().unwrap_or_default();
+    for event in TRAE_EVENTS {
+        let mut all = hooks.get(event).and_then(Value::as_array).cloned().unwrap_or_default();
+        all.retain(|group| !trae_group_ours(group));
+        all.push(json!({ "matcher": "", "hooks": [{ "type": "command", "command": command }] }));
+        hooks.insert(event.into(), Value::Array(all));
+    }
+    root.insert("hooks".into(), Value::Object(hooks));
+    Value::Object(root)
+}
+
+pub fn trae_uninstall(file: &Value) -> Value {
+    let mut root = file.as_object().cloned().unwrap_or_default();
+    let Some(hooks) = root.get("hooks").and_then(Value::as_object).cloned() else { return Value::Object(root) };
+    let mut hooks = hooks;
+    for event in TRAE_EVENTS {
+        let Some(groups) = hooks.get(event).and_then(Value::as_array).cloned() else { continue };
+        let kept: Vec<Value> = groups
+            .iter()
+            .filter_map(|g| {
+                let inner = g.get("hooks").and_then(Value::as_array)?;
+                let ours = inner.iter().filter(|h| trae_hook_ours(h)).count();
+                if ours == 0 {
+                    return Some(g.clone());
+                }
+                if ours == inner.len() {
+                    return None;
+                }
+                let mut g = g.clone();
+                g["hooks"] = Value::Array(inner.iter().filter(|h| !trae_hook_ours(h)).cloned().collect());
+                Some(g)
+            })
+            .collect();
+        if kept.is_empty() {
+            hooks.remove(event);
+        } else {
+            hooks.insert(event.into(), Value::Array(kept));
+        }
+    }
+    if hooks.is_empty() {
+        root.remove("hooks");
+    } else {
+        root.insert("hooks".into(), Value::Object(hooks));
+    }
+    Value::Object(root)
+}
+
+pub fn trae_status_of(file: &Value, command: &str) -> &'static str {
+    let Some(hooks) = file.get("hooks").and_then(Value::as_object) else { return "missing" };
+    let (mut found, mut current, mut stale) = (0usize, 0usize, false);
+    for event in TRAE_EVENTS {
+        for group in hooks.get(event).and_then(Value::as_array).into_iter().flatten() {
+            for h in group.get("hooks").and_then(Value::as_array).into_iter().flatten().filter(|h| trae_hook_ours(h)) {
+                found += 1;
+                if h.get("command").and_then(Value::as_str) == Some(command) {
+                    current += 1;
+                } else {
+                    stale = true;
+                }
+            }
+        }
+    }
+    if found == 0 {
+        "missing"
+    } else if stale {
+        "stale"
+    } else if current < TRAE_EVENTS.len() {
+        "partial"
+    } else {
+        "ok"
+    }
+}
+
+pub fn trae_hooks_status() -> &'static str {
+    if !trae_here() {
+        return "absent";
+    }
+    match read_json(&trae_hooks_file()) {
+        Ok(file) => trae_status_of(&file, &trae_command()),
+        Err(_) => "unreadable",
+    }
+}
+
+pub fn write_trae_hooks(action: &str) -> Result<(), String> {
+    let file = trae_hooks_file();
+    // Read from the disk, not as last read: nothing of someone else's is
+    // written back.
+    let before = read_json_now(&file)?;
+    match action {
+        "remove" if !file.exists() => Ok(()),
+        "remove" => write_back(&file, &trae_uninstall(&before)),
+        "install" => {
+            if !trae_here() {
+                return Err("Trae CN is not here (no ~/.trae-cn)".into());
+            }
+            write_back(&file, &trae_install(&before, &trae_command()))
+        }
+        _ => Err(format!("unknown action {action}")),
+    }
+}
+
+// --- WorkBuddy: Claude Code's hooks in its settings.json ----------------------
+//
+// WorkBuddy (Tencent's AI office agent) reads Claude Code-compatible hooks from
+// ~/.workbuddy-ai/settings.json (WorkBuddy AI) or ~/.workbuddy/settings.json
+// (legacy), for eight events (SessionStart, SessionEnd, UserPromptSubmit,
+// PreToolUse, PostToolUse, Stop, Notification, PreCompact). Its commands run
+// through a shell, so a quoted path is fine. State and notification only: its
+// approvals stay in its own sandbox and dialog (no PermissionRequest hook).
+pub const WORKBUDDY_FLAG: &str = "--wakuwaku-workbuddy-hook";
+const WORKBUDDY_EVENTS: [&str; 8] = [
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "Notification",
+    "PreCompact",
+];
+
+pub fn workbuddy_settings_file() -> PathBuf {
+    let home = PathBuf::from(std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).unwrap_or_default());
+    let current = home.join(".workbuddy-ai");
+    if current.join("settings.json").is_file() || current.is_dir() {
+        return current.join("settings.json");
+    }
+    let legacy = home.join(".workbuddy").join("settings.json");
+    if legacy.is_file() {
+        return legacy;
+    }
+    current.join("settings.json")
+}
+
+pub fn workbuddy_here() -> bool {
+    workbuddy_settings_file().is_file()
+}
+
+fn workbuddy_command() -> String {
+    format!("\"{}\" {WORKBUDDY_FLAG}", launch_command())
+}
+
+fn workbuddy_hook_ours(h: &Value) -> bool {
+    h.get("command").and_then(Value::as_str).is_some_and(|c| c.contains(WORKBUDDY_FLAG))
+}
+
+fn workbuddy_group_ours(g: &Value) -> bool {
+    g.get("hooks").and_then(Value::as_array).is_some_and(|hs| hs.iter().any(workbuddy_hook_ours))
+}
+
+pub fn workbuddy_install(file: &Value, command: &str) -> Value {
+    let mut root = file.as_object().cloned().unwrap_or_default();
+    let mut hooks = root.get("hooks").and_then(Value::as_object).cloned().unwrap_or_default();
+    for event in WORKBUDDY_EVENTS {
+        let mut all = hooks.get(event).and_then(Value::as_array).cloned().unwrap_or_default();
+        all.retain(|group| !workbuddy_group_ours(group));
+        all.push(json!({ "matcher": "", "hooks": [{ "type": "command", "command": command }] }));
+        hooks.insert(event.into(), Value::Array(all));
+    }
+    root.insert("hooks".into(), Value::Object(hooks));
+    Value::Object(root)
+}
+
+pub fn workbuddy_uninstall(file: &Value) -> Value {
+    let mut root = file.as_object().cloned().unwrap_or_default();
+    let Some(hooks) = root.get("hooks").and_then(Value::as_object).cloned() else { return Value::Object(root) };
+    let mut hooks = hooks;
+    for event in WORKBUDDY_EVENTS {
+        let Some(groups) = hooks.get(event).and_then(Value::as_array).cloned() else { continue };
+        let kept: Vec<Value> = groups
+            .iter()
+            .filter_map(|g| {
+                let inner = g.get("hooks").and_then(Value::as_array)?;
+                let ours = inner.iter().filter(|h| workbuddy_hook_ours(h)).count();
+                if ours == 0 {
+                    return Some(g.clone());
+                }
+                if ours == inner.len() {
+                    return None;
+                }
+                let mut g = g.clone();
+                g["hooks"] = Value::Array(inner.iter().filter(|h| !workbuddy_hook_ours(h)).cloned().collect());
+                Some(g)
+            })
+            .collect();
+        if kept.is_empty() {
+            hooks.remove(event);
+        } else {
+            hooks.insert(event.into(), Value::Array(kept));
+        }
+    }
+    if hooks.is_empty() {
+        root.remove("hooks");
+    } else {
+        root.insert("hooks".into(), Value::Object(hooks));
+    }
+    Value::Object(root)
+}
+
+pub fn workbuddy_status_of(file: &Value, command: &str) -> &'static str {
+    let Some(hooks) = file.get("hooks").and_then(Value::as_object) else { return "missing" };
+    let (mut found, mut current, mut stale) = (0usize, 0usize, false);
+    for event in WORKBUDDY_EVENTS {
+        for group in hooks.get(event).and_then(Value::as_array).into_iter().flatten() {
+            for h in group.get("hooks").and_then(Value::as_array).into_iter().flatten().filter(|h| workbuddy_hook_ours(h)) {
+                found += 1;
+                if h.get("command").and_then(Value::as_str) == Some(command) {
+                    current += 1;
+                } else {
+                    stale = true;
+                }
+            }
+        }
+    }
+    if found == 0 {
+        "missing"
+    } else if stale {
+        "stale"
+    } else if current < WORKBUDDY_EVENTS.len() {
+        "partial"
+    } else {
+        "ok"
+    }
+}
+
+pub fn workbuddy_hooks_status() -> &'static str {
+    if !workbuddy_here() {
+        return "absent";
+    }
+    match read_json(&workbuddy_settings_file()) {
+        Ok(file) => workbuddy_status_of(&file, &workbuddy_command()),
+        Err(_) => "unreadable",
+    }
+}
+
+pub fn write_workbuddy_hooks(action: &str) -> Result<(), String> {
+    let file = workbuddy_settings_file();
+    let before = read_json_now(&file)?;
+    match action {
+        "remove" if !file.exists() => Ok(()),
+        "remove" => write_back(&file, &workbuddy_uninstall(&before)),
+        "install" => {
+            if !workbuddy_here() {
+                return Err("WorkBuddy is not here (no settings.json)".into());
+            }
+            write_back(&file, &workbuddy_install(&before, &workbuddy_command()))
+        }
+        _ => Err(format!("unknown action {action}")),
+    }
+}
+
 // --- DeepSeek Harness: its Claude Code hook bridge, and a hooks.json of hers -----------
 //
 // DeepSeek Harness (dsh, its desktop app and CLI) has no hooks file of its
@@ -2340,5 +2664,33 @@ mod tests {
         assert_eq!(said_by(started_by(&args(&format!("wakuwaku.exe {}", task_args())))), ", by her logon task");
         assert_eq!(said_by(Some(BY_RUN)), ", by the Run value");
         assert_eq!(said_by(None), "");
+    }
+
+    // Trae CN: its hooks.json in Claude Code's shape, merged and taken out
+    // again without touching anyone else's.
+    #[test]
+    fn trae_hooks_install_status_and_uninstall() {
+        let command = trae_command();
+        let theirs = json!({
+            "version": 1,
+            "hooks": { "Stop": [{ "matcher": "", "hooks": [{ "type": "command", "command": "notify-me" }] }] }
+        });
+        assert_eq!(trae_status_of(&theirs, &command), "missing");
+        let with = trae_install(&theirs, &command);
+        assert_eq!(trae_status_of(&with, &command), "ok");
+        // Its own hook stays, ours beside it.
+        assert_eq!(with["hooks"]["Stop"].as_array().unwrap().len(), 2);
+        assert_eq!(with["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        // Another copy's command: stale, and repaired in place.
+        let old = trae_powershell("& 'C:\\Old\\wakuwaku.exe' --wakuwaku-trae-hook");
+        assert_eq!(trae_status_of(&trae_install(&theirs, &old), &command), "stale");
+        // Out: ours alone go, theirs stays.
+        let back = trae_uninstall(&with);
+        assert_eq!(back["hooks"]["Stop"], json!([{ "matcher": "", "hooks": [{ "type": "command", "command": "notify-me" }] }]));
+        assert!(back["hooks"].get("PreToolUse").is_none());
+        // The command has no quotes outside the encoded payload (Trae's sandbox).
+        assert!(command.starts_with("powershell.exe ") && command.contains("-EncodedCommand "));
+        let code = command.split("-EncodedCommand ").nth(1).unwrap();
+        assert!(!code.contains('"') && !code.contains('\''));
     }
 }

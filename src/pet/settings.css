@@ -25,10 +25,19 @@
   transition: opacity 0.16s ease;
 }
 
+/* The width it is to be, with the same spring the island's own box has (the
+   one the panel is drawn in): the box is clipped (overflow: hidden), so a
+   width that changed at once while the box was still growing left the panel
+   cut off and then revealed — a twitch on every change of page, and the
+   box's edge left behind where it was. This rule is the one that holds (it
+   is more telling than the plain #island-settings), so the width is
+   transitioned here. */
 [data-view='settings'] #island-settings {
   opacity: 1;
   pointer-events: auto;
-  transition: opacity 0.24s ease 0.16s;
+  transition:
+    opacity 0.24s ease 0.16s,
+    width 0.56s cubic-bezier(0.3, 1.45, 0.5, 1);
 }
 
 /* In the settings the island is a panel, not a button. */
@@ -351,7 +360,10 @@
   background: var(--g3);
 }
 
-.s-body > * {
+/* A page opening rises into place; a page turned is put in at once (a rise
+   under a page just swapped, with the box still springing around it, read
+   as a flicker: the user, 2026-10-20). */
+#island-settings.opening .s-body > * {
   animation: s-rise 0.32s var(--spring) both;
 }
 
@@ -397,6 +409,14 @@
   overflow: hidden;
   border-radius: 18px;
   background: var(--g1);
+}
+
+/* Two cards in a row with no heading between them: clear of each other, as the
+   rows of one card are not (a group split for its own reasons stays one card,
+   its own children). Without it a note's card, the options after it and the
+   page's next card all met edge to edge and read as one tall block. */
+#island-settings .grp + .grp {
+  margin-top: 8px;
 }
 
 #island-settings .r {
@@ -494,6 +514,816 @@
 
 #island-settings .r + .r {
   border-top: 1px solid #262628;
+}
+
+/* The calendar (the Calendar page): a month of days, today ringed. */
+#island-settings .cal {
+  padding: 4px 14px 10px;
+}
+
+#island-settings .cal .calhead {
+  min-height: 38px;
+  padding: 0;
+  border: 0;
+}
+
+#island-settings .calgrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+}
+
+#island-settings .calgrid .ch {
+  padding: 4px 0;
+  color: var(--g4);
+  font-size: 11px;
+  text-align: center;
+}
+
+#island-settings .calgrid .cd {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+#island-settings .calgrid .cd b {
+  font-weight: 500;
+}
+
+#island-settings .calgrid .cd i {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 9.5px;
+  font-style: normal;
+  color: var(--g4);
+}
+
+#island-settings .calgrid .cd u {
+  font-size: 9.5px;
+  color: var(--g4);
+  text-decoration: none;
+}
+
+#island-settings .calgrid .cd.sel:not(.today) {
+  box-shadow: inset 0 0 0 1.5px #7aaaff;
+}
+
+#island-settings .calform .in.t {
+  flex: none;
+  width: 92px;
+}
+
+#island-settings .calform select.in {
+  flex: none;
+  width: 120px;
+}
+
+#island-settings .calgrid .cd.out {
+  color: var(--g4);
+  opacity: 0.45;
+}
+
+#island-settings .calgrid .cd.today {
+  box-shadow: inset 0 0 0 1.5px #ff9f0a;
+  font-weight: 600;
+}
+
+#island-settings .calgrid .cd.today b {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#island-settings .calviews {
+  gap: 4px;
+  padding: 0 0 6px;
+  justify-content: flex-end;
+}
+
+#island-settings .calviews .pbtn.on {
+  background: rgba(94, 155, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(94, 155, 255, 0.5);
+}
+
+#island-settings .calsch {
+  gap: 6px;
+  padding: 0 0 8px;
+}
+
+#island-settings .calsch .in {
+  flex: 1;
+  min-width: 0;
+}
+
+#island-settings .calform .in.d {
+  flex: none;
+  width: 134px;
+}
+
+#island-settings .calgrid.calweek .cd {
+  align-items: stretch;
+  min-height: 96px;
+  padding: 4px 5px;
+  gap: 3px;
+  text-align: left;
+}
+
+#island-settings .calgrid.calweek .cd b {
+  color: var(--g4);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+#island-settings .calgrid.calweek .cd i.cev {
+  display: block;
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: rgba(94, 155, 255, 0.16);
+  color: var(--fg);
+  font-size: 9.5px;
+  cursor: grab;
+}
+
+#island-settings .calgrid.calweek .cd i.cev em {
+  color: var(--g4);
+  font-style: normal;
+}
+
+#island-settings .calgrid .cd i.cev:active {
+  cursor: grabbing;
+}
+
+/* The calendar page as the design has it: a toolbar, roomy day cells, an agenda. */
+#island-settings .calpage {
+  padding: 2px 14px 8px;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+#island-settings .calgrid {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+#island-settings .wkhint {
+  margin-top: 8px;
+  color: var(--g4);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+#island-settings .calimport {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin-bottom: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+#island-settings .calimport h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+#island-settings .calimp-sub {
+  margin: 0 0 10px;
+  color: var(--g4);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+#island-settings .calimp-label {
+  display: block;
+  margin: 10px 0 0;
+  color: var(--g4);
+  font-size: 12px;
+}
+
+#island-settings .calimp-label input,
+#island-settings .calimp-label textarea,
+#island-settings .calimp-label select {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+  padding: 7px;
+  border: 0.57px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: #232324;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+#island-settings .calimp-label textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+#island-settings .calimp-list {
+  max-height: 160px;
+  margin: 8px 0;
+  overflow-y: auto;
+}
+
+#island-settings .calimp-row {
+  display: flex;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+
+#island-settings .calimp-when {
+  flex-shrink: 0;
+  width: 130px;
+  color: var(--g4);
+}
+
+#island-settings .calimp-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#island-settings .calimp-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* The month grid and its chips, as the DSH panel measures them. */
+#island-settings .calgrid {
+  gap: 6px;
+}
+
+#island-settings .calgrid .cd {
+  min-height: 88px;
+  padding: 5px 5px 6px;
+  border-radius: 10px;
+  background: #2c2c2e;
+  font-size: 13px;
+}
+
+#island-settings .calgrid .cd.sel:not(.today) {
+  box-shadow: inset 0 0 0 1.5px #7aaaff;
+}
+
+#island-settings .calgrid .cd i {
+  padding: 3px 6px;
+  border-left: 2.86px solid #7aaaff;
+  border-radius: 7px;
+  background: #232324;
+  font-size: 12px;
+}
+
+#island-settings .calhead {
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+#island-settings .caltitle {
+  font-size: 15px;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+#island-settings .calmonth {
+  margin: 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+#island-settings .pbtn.lite {
+  background: #ececec;
+  color: #1a1a1a;
+}
+
+#island-settings .calseg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#island-settings .seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--g4);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+#island-settings .seg-btn.on {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+#island-settings .calactions {
+  gap: 6px;
+  padding: 2px 0 8px;
+}
+
+#island-settings .calactions .in {
+  flex: 1;
+  min-width: 0;
+}
+
+#island-settings .calgrid .cd {
+  min-height: 72px;
+  align-items: stretch;
+  text-align: left;
+  padding: 4px 5px;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+#island-settings .calgrid .cd b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+#island-settings .calgrid .cd.today b {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#island-settings .calgrid .cd.sel:not(.today) b {
+  color: #7aaaff;
+}
+
+#island-settings .calgrid .cd i {
+  border-left: 2.5px solid #5e9eff;
+  padding-left: 4px;
+  border-radius: 3px;
+  background: rgba(94, 158, 255, 0.12);
+  color: var(--fg);
+}
+
+#island-settings .calfoot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding: 8px 2px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--g4);
+  font-size: 11px;
+}
+
+#island-settings .agenda-date {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 14px 2px 8px;
+}
+
+#island-settings .agenda-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 6px;
+  padding: 10px 14px;
+  border-left: 3px solid #5e9eff;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+#island-settings .agenda-time {
+  flex-shrink: 0;
+  width: 100px;
+  color: var(--g4);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+#island-settings .agenda-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+#island-settings .today-tag {
+  margin-left: 8px;
+  color: #5e9eff;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+#island-settings .wkhead {
+  display: grid;
+  grid-template-columns: 44px repeat(7, 1fr);
+}
+
+#island-settings .wkhead span {
+  padding: 4px 0;
+  text-align: center;
+  color: var(--g4);
+  font-size: 11px;
+}
+
+#island-settings .wkhead span b {
+  display: block;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#island-settings .wkhead span.today b {
+  color: #5e9eff;
+}
+
+#island-settings .wkbody {
+  display: grid;
+  grid-template-columns: 44px repeat(7, 1fr);
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+#island-settings .wktimes {
+  display: flex;
+  flex-direction: column;
+}
+
+#island-settings .wktimes span {
+  height: 44px;
+  padding-right: 5px;
+  color: var(--g4);
+  font-size: 10px;
+  text-align: right;
+}
+
+#island-settings .wkcol {
+  position: relative;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#island-settings .wkcol.today {
+  background: rgba(94, 158, 255, 0.05);
+}
+
+#island-settings .wkhour {
+  height: 44px;
+}
+
+#island-settings .wkev {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.25;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+#island-settings .wkev b {
+  display: block;
+  font-weight: 600;
+}
+
+#island-settings .wkev span {
+  opacity: 0.85;
+  font-size: 9px;
+}
+
+/* The all-day row above the grid: an event with no time has no place on the
+   hours, so it stands in a line of its own, one cell a day. */
+#island-settings .wkalldayrow {
+  display: grid;
+  grid-template-columns: 44px repeat(7, 1fr);
+  min-height: 22px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#island-settings .wkalldaylabel {
+  padding: 3px 5px 0 0;
+  color: var(--g4);
+  font-size: 9px;
+  text-align: right;
+}
+
+#island-settings .wkallday {
+  padding: 2px 1px;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+#island-settings .wkallday.today {
+  background: rgba(94, 158, 255, 0.05);
+}
+
+#island-settings .wkallev {
+  display: block;
+  margin-bottom: 2px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Dragged: the block under the pointer, where it would land: a dashed
+   outline in Windows' accent, the same as the desktop's rectangle over a
+   display's bare desktop (desk.js). */
+#island-settings .wkev[draggable='true'] {
+  cursor: grab;
+}
+
+#island-settings .wkghost {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border: 1px dashed rgba(255, 255, 255, 0.55);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+/* The grip at its bottom: how long it lasts. Only there when there is room
+   to grab it (a short block is too thin to show one). */
+#island-settings .wkedge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 7px;
+  cursor: ns-resize;
+}
+
+#island-settings .wkedge::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.6);
+  transform: translateX(-50%);
+}
+
+/* The keyboard: a block with the focus says so, and its tip says the keys. */
+#island-settings .wkev:focus {
+  outline: 2px solid var(--accent, #5e9eff);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #island-settings .wkev {
+    transition: box-shadow 120ms ease;
+  }
+}
+
+/* The MCP page as the design has it: one foldable server, its command, its tools. */
+#island-settings .mcphead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 10px;
+}
+
+#island-settings .mcphead .label {
+  color: var(--g4);
+  font-size: 13px;
+}
+
+#island-settings .mcpcard {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+}
+
+#island-settings .mcpcard.off {
+  opacity: 0.5;
+}
+
+#island-settings .mcph {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+#island-settings .mcph:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+#island-settings .mcp-arrow {
+  color: var(--g4);
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+#island-settings .mcpcard.folded .mcp-arrow {
+  transform: rotate(-90deg);
+}
+
+#island-settings .mcp-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #6b5ce7, #4a3fd4);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+#island-settings .mcp-id {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#island-settings .mcp-tag,
+#island-settings .mcp-count {
+  color: var(--g4);
+  font-size: 11px;
+}
+
+#island-settings .mcp-check {
+  color: #30d158;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+#island-settings .mcp-gear {
+  border: 0;
+  background: none;
+  color: var(--g4);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+#island-settings .mcp-gear:hover {
+  color: var(--fg);
+}
+
+#island-settings .mcpbody {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+#island-settings .mcpcard.folded .mcpbody {
+  display: none;
+}
+
+#island-settings .mcpcmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 12px 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+#island-settings .mcpcmd .mono {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+#island-settings .mtools {
+  padding: 8px 0 10px;
+}
+
+#island-settings .mtrow {
+  display: grid;
+  grid-template-columns: minmax(170px, 230px) 1fr;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+#island-settings .mtn {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#island-settings .mtd {
+  color: var(--g4);
+  font-size: 12px;
+}
+
+#island-settings .mcpmask {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#island-settings .calmodal {
+  max-height: 82vh;
+  overflow-y: auto;
+}
+
+#island-settings .calhint {
+  margin: 4px 0 2px;
+  line-height: 1.5;
+}
+
+#island-settings .connmodal {
+  max-height: 84vh;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+#island-settings .connmodal .in {
+  height: 37px;
+  padding: 7px 9px;
+  border: 0.57px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  background: #2c2c2e;
+  font-size: 14px;
+}
+
+#island-settings .mcpmodal {
+  width: min(560px, 90%);
+  background: #232325;
+  color: #f5f5f7;
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#island-settings .mcpmodal-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#island-settings .mcpcode {
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow: auto;
+}
+
+
+/* The calendar's event titles (the class names came from the dev-server rows,
+   which are no longer shown on the Plugins page). */
+#island-settings .devtitle {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#island-settings .devtitle b {
+  font-weight: 600;
+}
+
+#island-settings .devmeta {
+  color: var(--g4);
+  font-variant-numeric: tabular-nums;
 }
 
 #island-settings .d {
@@ -1004,6 +1834,36 @@
   overflow-wrap: anywhere;
 }
 
+/* Whose letter: the sender's face at its head, a letter of their name on the
+   colour of their address (settings.js avatarHTML), and their name and the
+   date beside it. */
+#island-settings .mail-read .from {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 6px;
+}
+
+#island-settings .mail-read .from .who {
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+#island-settings .mail-read .av {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: hsl(var(--av-h, 214) 45% 42%);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+
 #island-settings .m-files {
   display: flex;
   flex-wrap: wrap;
@@ -1011,10 +1871,30 @@
   margin-top: 8px;
 }
 
+/* A letter as it was written: its own styles and its own layout, in a frame
+   that runs nothing. The frame is as tall as the letter in it (the page
+   measures it). The plain text is not under it: a letter shows as its
+   sender made it (the user, 2026-10-20). The frame's box is rounded on all
+   four corners, so no corner of the letter is a right angle (the user,
+   2026-10-21); the wrapper is what clips it. */
+#island-settings .m-html-wrap {
+  margin: 10px 0 4px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+#island-settings .m-html {
+  display: block;
+  width: 100%;
+  height: 160px;
+  border: 0;
+  background: transparent;
+  color-scheme: light dark;
+}
+
 #island-settings .m-text {
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
+  overflow-wrap: anywhere;}
 
 /* Which inbox and which letters: the picker on the left, the filter on the right. */
 #island-settings .inbox .mail-tools {
@@ -1291,6 +2171,8 @@
 
 #island-settings .pane-l .row-sec {
   flex: none;
+  height: 32px;
+  margin: 0 8px 8px;
 }
 
 #island-settings .pane-l .inbox {
@@ -1317,23 +2199,36 @@
 }
 
 #island-settings .pane-r {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   padding-right: 4px;
 }
 
+/* The letter bar is kept at the top of the pane; only what is under it
+   scrolls, so Reply and the hand-off stay where they are however far down a
+   letter is read (the user, 2026-10-21). */
 #island-settings .pane-r > .mail-bar {
-  margin-top: 0;
+  flex: none;
+  height: 32px;
+  margin: 0 4px 8px;
+}
+
+#island-settings .pane-r-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 #island-settings .pane-l .inbox::-webkit-scrollbar,
-#island-settings .pane-r::-webkit-scrollbar {
+#island-settings .pane-r-body::-webkit-scrollbar {
   width: 6px;
 }
 
 #island-settings .pane-l .inbox::-webkit-scrollbar-thumb,
-#island-settings .pane-r::-webkit-scrollbar-thumb {
+#island-settings .pane-r-body::-webkit-scrollbar-thumb {
   border-radius: 3px;
   background: var(--g3);
 }
@@ -1498,6 +2393,10 @@
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 8px;
+  /* Clear of the card below: without it the two edges met (no margin on
+     either), and the cards read as lying on top of it. Same 8 as between
+     the cards themselves. */
+  margin-bottom: 8px;
 }
 
 #island-settings .mode {

@@ -87,7 +87,7 @@
   const desktop = F => ({
     sessions: [],
     asks: [],
-    widgets: F.widgets('monitor', 'today', 'weather', 'tokens', 'inbox-a1', 'pomodoro', 'countdown', 'stock-aapl', 'deploy'),
+    widgets: F.widgets('monitor', 'today', 'weather', 'tokens', 'music', 'inbox-a1', 'pomodoro', 'countdown', 'stock-aapl', 'deploy'),
     plugins: F.PLUGINS,
     windows: F.WINDOWS,
     tray: F.TRAY,
@@ -570,6 +570,19 @@
         await p.wait(600)
       },
     })),
+    {
+      id: 'settings-calendar',
+      section: 'settings',
+      title: '设置 · 日历（事件、提醒、账户）',
+      page: 'island',
+      home: 'taskbar',
+      view: [0, above(660), 560, 660],
+      world: F => ({ ...busy(F) }),
+      steps: async p => {
+        p.emit('island:settings', { tab: 'calendar' })
+        await p.wait(900)
+      },
+    },
     {
       id: 'settings-plugins-unplaced',
       section: 'settings',

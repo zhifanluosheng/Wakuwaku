@@ -2,7 +2,7 @@
 
 任何程序往 `http://127.0.0.1:47213/widget` 发一条 JSON，它就会出现在灵动岛上。没有会话需要你时，插件在岛上轮流显示；会话永远优先。隔一会儿再发一次，它就一直在；停了，过了 `ttl` 秒它就消失。宠物只显示这些文字，不运行任何东西。
 
-**不用自己运行**：天气、股票、番茄钟、倒计时、久坐提醒、CI、开发服务器这几个，在设置的「插件」页打开开关，宠物就在后台替你跑，参数在那一行的「设置」里填；她开机启动，它们也就开机就跑。下面是自己在终端里跑的用法，写新插件时可以参考。
+**不用自己运行**：天气、股票、番茄钟、倒计时、久坐提醒、CI 这几个，在设置的「插件」页打开开关，宠物就在后台替你跑，参数在那一行的「设置」里填；她开机启动，它们也就开机就跑。下面是自己在终端里跑的用法，写新插件时可以参考。
 
 用 PowerShell 7（`pwsh`）或 Windows 自带的 PowerShell 都能跑；大多数加 `-Once` 只发一次。从 cmd 或 Git Bash 传好几个值时用逗号连起来、不加空格：`-Symbol USDCNY=X,BTC-USD`。
 
@@ -14,7 +14,7 @@
 | `ci.ps1 -Repo owner/repo [-Prs]` | main · CI ✓ 通过；PR · 3 个开着 #12✓ #15✗ | GitHub Actions；看着在跑的那次结束时叫开灵动岛。公开仓库不用 token，私有仓库设 `GITHUB_TOKEN` |
 | `pomodoro.ps1` | 专注 · 第 1 轮 18:32 | 25 + 5 分钟，每 4 轮长休息；到点叫开灵动岛 |
 | `countdown.ps1 -At '2026-10-10 18:00' -Title 交周报` | 交周报 还有 1 天 6 小时 | 也可以 `-File deadlines.txt`，一行一个；提前 1 小时和到点各提醒一次 |
-| `devserver.ps1 -Url http://localhost:3000,http://localhost:5173` | 开发服务器 3000 ✓ 5173 ✗ | 有响应就算在跑；在跑的停了就叫开灵动岛 |
+| `devserver.ps1` | 开发服务 web 5173 ✓ · api 3000 ✓ | 自己找本机的开发服务：扫监听端口，按进程和命令行认出 Vite、Next、Nuxt、node、bun、deno、dotnet、uvicorn、Flask、rails、php、go……一个服务一个 widget；在跑的停了变灰显示「已停止」，`-Start 5173` 按记下的命令重新启动。`-Url` 仍可指定几个固定地址 |
 | `stock.ps1 -Symbol 600519.SS,USDCNY=X,BTC-USD -Name 茅台,美元,比特币` | 茅台 1,263 ▲0.58% | 股票、汇率、币价，Yahoo Finance 的图表数据（非官方接口）；默认红涨绿跌，`-GreenUp` 反过来（她替你跑时按插件页的「涨跌颜色」） |
 | `weather.ps1 -City 上海` | Shanghai · 多云 22°，展开时加上今天的 14°~22° | Open-Meteo，不用注册；城市可以写中文 |
 | `stretch.ps1 -Minutes 50` | 坐久了，起来走走 12 分钟后 | 到点叫开灵动岛 |

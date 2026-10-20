@@ -32,6 +32,8 @@
   const Status = window.Status
   const Widgets = window.Widgets
   const Agents = window.Agents
+  // The week view's arithmetic, in calweek.js (no page, as the tests read it).
+  const CalWeek = window.CalWeek
 
   // The island's colours (on black), the same as island.js.
   const COLOR = { idle: '#8e8e93', working: '#5e9bff', waiting: '#ffb340', done: '#34d27b', review: '#b18cff', error: '#ff5c6c' }
@@ -42,8 +44,8 @@
   // (island.rs asks for the pets, or connecting), the page they are part of
   // opens, scrolled to them (PART_OF, showPart); connecting while the
   // welcome shows is the welcome, at General's top.
-  const TABS = ['now', 'agents', 'look', 'widgets', 'mail']
-  const TAB_KEY = { now: 's.tabGeneral', agents: 's.tabAgents', look: 's.tabLook', widgets: 's.tabWidgets', mail: 's.tabMail' }
+  const TABS = ['now', 'agents', 'look', 'widgets', 'mcp', 'calendar', 'mail']
+  const TAB_KEY = { now: 's.tabGeneral', agents: 's.tabAgents', look: 's.tabLook', widgets: 's.tabWidgets', mcp: 's.tabMcp', calendar: 's.tabCalendar', mail: 's.tabMail' }
   const PART_OF = { pets: 'look', alerts: 'now', connect: 'agents', update: 'now', crash: 'now' }
   const HEAD_KEY = { working: 's.headWorking', waiting: 's.headWaiting', done: 's.headDone', review: 's.headReview', error: 's.headError' }
   const SIZES = [['small', 0.4], ['medium', 0.55], ['large', 0.75]]
@@ -70,6 +72,10 @@
   let openedAt = 0
   const BLUR_GRACE_MS = 500
   let tab = 'now'
+  // The page that was last drawn, to tell a new page from the same one
+  // again (a new one is put in whole; the same one is patched, so that what
+  // was typed in it and where it was scrolled to are kept).
+  let drawnTab = ''
   let snap = null
   let lang = 'en'
   // The crash report shown, as it would be sent (pageCrash).
@@ -88,6 +94,9 @@
   const isLink = text => /:\/\/|codex-pets\.net/i.test(text)
   let thumbTimers = []
   let clockTimer
+  // The page rising into place as the panel opens (settings.css): off again
+  // once it is up, so turning a page does not rise with it.
+  let openingTimer
   // The plugins page: the plugin whose settings are folded out, and what is
   // typed in them and not yet kept ("weather.City": "上海").
   let openPlugin = ''
@@ -173,9 +182,17 @@
   // The new markup, changed in place: only what differs is touched, so a
   // number that changed (a plugin's reading) does not redraw the page around
   // it, and a box being typed in keeps its focus and caret.
-  function setHTML(el, html) {
+  function setHTML(el, html, fresh = false) {
     if (el._html === html) return false
     el._html = html
+    if (fresh) {
+      // Another page entirely: none of this one is kept (what was typed in
+      // it, where it was scrolled to), and the old one is not walked node by
+      // node to become the new one. That walk took long enough to be felt
+      // when it was the mail page with a letter open in it.
+      el.innerHTML = html
+      return true
+    }
     const next = document.createElement('template')
     next.innerHTML = html
     morphChildren(el, next.content)
@@ -707,18 +724,21 @@
 
   // The plugins page as rows, in the order the person put them in: the
   // built-in ones, the plugins she runs (with what their widgets say), and
-  // the widgets of anyone else's scripts.
+  // the widgets of anyone else's scripts. The dev-server plugin and the
+  // widgets it sends (devserver-8931, devserver-tsx-3100, …) are not shown
+  // here: their rows are gone from this page (the user, 2026-10-21).
   function widgetRows() {
     const rank = key => {
       const i = (snap.settings.widgetOrder || []).indexOf(key)
       return i < 0 ? Infinity : i
     }
     const widgets = snap.widgets || []
+    const devServer = key => key === 'devserver' || String(key).startsWith('devserver-')
     const rows = [
       ...widgets.filter(w => w.builtIn).map(w => ({ key: w.id, widget: w })),
       ...(snap.plugins || []).map(p => ({ key: p.id, plugin: p, mine: widgets.filter(w => w.plugin === p.id) })),
       ...widgets.filter(w => !w.builtIn && !w.plugin).map(w => ({ key: w.id, widget: w })),
-    ]
+    ].filter(r => !devServer(r.key))
     return rows.map((r, i) => ({ ...r, i })).sort((x, y) => rank(x.key) - rank(y.key) || x.i - y.i)
   }
 
@@ -969,6 +989,402 @@
   // offers 添加小工具…; its settings folded under it. Then how they take
   // turns, whether they may open the island, waku for the terminal, and how
   // to write one.
+  // The calendar: a month, the events of a day picked, and a small form to
+  // add or change one (repeats daily, weekly or monthly). data/calendar.json.
+  let calAt = new Date()
+  let calSel = null
+  let calEvents = null
+  let calBusy = false
+  let calEdit = null
+  let calIcs = ''
+  let calAccount = null
+  let calAccounts = []
+  let calActiveId = ''
+  let calSyncMsg = ''
+  let calMode = 'month'
+  let calDrag = null
+  let calQuery = ''
+  // The width the settings panel is to be, in px: 0 for the narrow one (the
+  // width it has in the CSS). The island's window is made for this, and the
+  // panel grows into it.
+  let calWidth = 0
+  // The week view's own drag: an event block carries its length, and moving it
+  // keeps that length (dragging to a new hour keeps how long it lasts). A
+  // plain id would lose it.
+  let calWeekDrag = null
+  let mcpOpen = true
+  let mcpModal = false
+  let mcpNote = ''
+  let calConnOpen = false
+  let calImportOpen = false
+  let calImportPreview = null
+  function loadCalendarAccount() {
+    if (calAccounts.length) return
+    window.pet.calendar
+      .account()
+      .then(a => {
+        calAccounts = Array.isArray(a?.accounts) ? a.accounts : []
+        calActiveId = a?.active || ''
+        if (!calAccount) calAccount = calAccounts.find(x => x.id === calActiveId) || calAccounts[0] || null
+      })
+      .catch(() => {
+        calAccounts = []
+      })
+      .then(() => {
+        if (isOpen && tab === 'calendar') draw()
+      })
+  }
+  const calDayKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const calDate = s => new Date(`${s}T00:00:00`)
+  const calOn = (e, day) => {
+    if (!e || typeof e.date !== 'string' || !day) return false
+    if (e.date === day) return true
+    const from = calDate(e.date)
+    const to = calDate(day)
+    if (isNaN(from) || isNaN(to) || to < from) return false
+    if (e.repeat === 'daily') return true
+    if (e.repeat === 'weekly') return from.getDay() === to.getDay()
+    if (e.repeat === 'monthly') return from.getDate() === to.getDate()
+    return false
+  }
+  const calOf = day => (calEvents || []).filter(e => calOn(e, day)).sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')))
+  // The week view's arithmetic, from calweek.js. The block's top, its length
+  // and where a drop or a grip puts it are all its arithmetic, so the three
+  // ways of moving an event cannot disagree.
+  const { HOUR_PX, SNAP, min: calMin, pxToMin: calPxToMin, minToPx: calMinToPx } = CalWeek
+  // Which event an id names, among everything kept.
+  // Which event an id names, among everything kept. The account says which
+// one, when the same event is in two.
+const calById = (id, account) =>
+  (calEvents || []).find(e => String(e.id) === String(id) && (account === undefined || String(e.account || '') === String(account || '')))
+  // An event's identity among all the accounts: the account it is in and its
+  // own id. The same event may be in two accounts (copied to both), so the
+  // id alone does not say which one, and merging by it alone would let one
+  // account's copy hide the other's. The account it was made in is the one
+  // that is current; an event made before accounts had one belongs to it
+  // too, so it is not counted twice.
+  const calEventKey = e => `${e && e.account ? e.account : calActiveId}\u0001${e ? e.id : ''}`
+  // The same event, as the page knows it: the id and the account together.
+  const calSameEvent = (a, b) => String(a.id) === String(b.id) && String(a.account || calActiveId) === String(b.account || calActiveId)
+  // The time zones as a list to choose from, in the language of the page: the
+  // name Windows' own data gives the zone ("中国标准时间", "日本标准时间"),
+  // and the zone's own name beside it, so the one wanted is found either
+  // way. A zone the platform has no name for is listed by its own name alone.
+  // The names are made once and kept: there are some four hundred zones and
+  // a formatter each is not cheap, and the list is drawn every time the
+  // import panel is.
+  let calZones = ''
+  const calZoneOptions = () => {
+    if (calZones) return calZones
+    const list = typeof Intl !== 'undefined' && Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : ['Asia/Shanghai', 'UTC', 'Asia/Tokyo', 'Europe/London', 'America/New_York']
+    const here = lang === 'zh' ? 'zh-CN' : 'en-US'
+    const formatters = new Map()
+    const label = z => {
+      try {
+        let f = formatters.get(z)
+        if (!f) {
+          f = new Intl.DateTimeFormat(here, { timeZone: z, timeZoneName: 'long' })
+          formatters.set(z, f)
+        }
+        const said = f.formatToParts(new Date()).find(p => p.type === 'timeZoneName')?.value || ''
+        return said ? `${said} · ${z}` : z
+      } catch (e) {
+        return z
+      }
+    }
+    calZones = list.map(z => `<option value="${esc(z)}">${esc(label(z))}</option>`).join('')
+    return calZones
+  }
+  function loadCalendar() {
+    if (calEvents || calBusy) return
+    calBusy = true
+    window.pet.calendar
+      .get()
+      .then(list => {
+        calEvents = Array.isArray(list) ? list : []
+      })
+      .catch(() => {
+        calEvents = []
+      })
+      .then(() => {
+        calBusy = false
+        if (isOpen && tab === 'calendar') draw()
+      })
+  }
+  function calSave(list) {
+    calEvents = list
+    return window.pet.calendar.set(list).then(() => draw())
+  }
+  function pageCalendar() {
+    if (!calEvents && !calBusy) loadCalendar()
+    if (!calAccount) loadCalendarAccount()
+    const year = calAt.getFullYear()
+    const month = calAt.getMonth()
+    const today = new Date()
+    const locale = lang === 'zh' ? 'zh-CN' : 'en-US'
+    const head = Array.from({ length: 7 }, (_, i) => new Date(2024, 0, 7 + i).toLocaleDateString(locale, { weekday: 'short' }))
+    const sel = calSel || ''
+    const listDay = calSel || (calMode === 'month' ? calDayKey(today) : calDayKey(calAt))
+    const weekStart = new Date(calAt.getFullYear(), calAt.getMonth(), calAt.getDate() - calAt.getDay())
+    const chip = e => {
+      const colour = colorOf(e)
+      return `<i class="cev" draggable="true" data-caldrag="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}" style="border-left-color:${colour};background:${colour}26;color:${colour}">${calMode === 'week' && e.start ? `<em>${esc(e.start)}</em>` : ''}${esc(e.title || '')}</i>`
+    }
+    // An event is drawn in the colour of the calendar it is in, so two
+    // accounts' events are told apart by where they are from. The colour
+    // comes from the server (CalDAV's calendar-color, which iCloud, Google
+    // and Nextcloud each give); a calendar that gives none, and an event made
+    // here, take one of their own, the same one for the same calendar every
+    // time.
+    const EXTRA_COLORS = ['#ff6b9d', '#64d2ff', '#ffd60a', '#5e5ce6', '#ff453a', '#32ade6', '#ff9f0a', '#30d158', '#5e9eff', '#bf5af2']
+    const colorOf = e => {
+      const given = String(e.color || '').trim()
+      if (/^#?[0-9a-f]{6}$/i.test(given)) return given.startsWith('#') ? given : `#${given}`
+      // The calendar it is in, and not the event's own title: two events of
+      // one calendar are one colour, and the same calendar of two accounts
+      // is still one colour.
+      const source = String(e.calendar || e.account || '')
+      let hash = 0
+      for (const ch of source) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+      return EXTRA_COLORS[hash % EXTRA_COLORS.length]
+    }
+    const extra = e =>
+      `${e.note ? `<div class="d">${esc(e.note)}</div>` : ''}${e.where ? `<div class="d">${esc(e.where)}</div>` : ''}${e.url ? `<button class="link" data-calopen="${esc(e.url)}">${esc(e.url)}</button>` : ''}`
+    let title
+    let cells
+    let gridClass = ''
+    let weekView = ''
+    if (calMode === 'week') {
+      title = `${weekStart.toLocaleDateString(locale, { month: 'short', day: 'numeric' })} – ${new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6).toLocaleDateString(locale, { month: 'short', day: 'numeric' })}`
+      cells = ''
+      const hours = Array.from({ length: 24 }, (_, i) => i)
+      // The all-day row above the grid: an event with no time has no place
+      // on the hours, so it stands in its own line (as it does in a week
+      // view that has them).
+      const allDayRow = `<div class="wkalldayrow"><span class="wkalldaylabel">${esc(T('cal.allDay'))}</span>${Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i)
+        const key = calDayKey(d)
+        const list = calOf(key).filter(e => !e.start)
+        return `<div class="wkallday${key === calDayKey(today) ? ' today' : ''}">${list
+          .map(e => `<i class="wkallev" style="background:${colorOf(e)}" data-calfind="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}">${esc(e.title || '')}</i>`)
+          .join('')}</div>`
+      }).join('')}</div>`
+      weekView = `<div class="wkhead"><span></span>${Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i)
+        const key = calDayKey(d)
+        return `<span class="${key === sel ? 'sel' : ''}${key === calDayKey(today) ? ' today' : ''}">${esc(d.toLocaleDateString(locale, { weekday: 'short' }))}<b>${d.getDate()}</b></span>`
+      }).join('')}</div>
+        ${allDayRow}
+        <div class="wkbody"><div class="wktimes">${hours.map(h => `<span>${h === 0 ? '' : `${String(h).padStart(2, '0')}:00`}</span>`).join('')}</div>${Array.from({ length: 7 }, (_, i) => {
+          const d = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i)
+          const key = calDayKey(d)
+          const blocks = calOf(key)
+            .filter(e => e.start)
+            .map(e => {
+              const [h, m] = e.start.split(':').map(Number)
+              const [eh, em] = (e.end || e.start).split(':').map(Number)
+              const top = (h + (m || 0) / 60) * 44
+              const height = Math.max(20, (eh * 60 + (em || 0) - (h * 60 + (m || 0))) * (44 / 60))
+              return `<div class="wkev" tabindex="0" draggable="true" data-caldrag="${esc(String(e.id))}" data-calweekdrop="${key}" style="top:${top}px;height:${height}px;background:${colorOf(e)}" data-calfind="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}"><b>${esc(e.title || '')}</b><span>${esc(e.start)}–${esc(e.end || '')}</span><i class="wkedge" data-calresize="${esc(String(e.id))}"></i></div>`
+            })
+            .join('')
+          return `<div class="wkcol${key === calDayKey(today) ? ' today' : ''}" data-calweekdrop="${key}">${hours.map(() => '<div class="wkhour"></div>').join('')}${blocks}</div>`
+        }).join('')}</div>`
+    } else if (calMode === 'day') {
+      title = calAt.toLocaleDateString(locale, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
+      cells = ''
+    } else {
+      const start = new Date(year, month, 1 - new Date(year, month, 1).getDay())
+      title = calAt.toLocaleDateString(locale, { year: 'numeric', month: 'long' })
+      cells = Array.from({ length: 42 }, (_, i) => {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)
+        const key = calDayKey(d)
+        const list = calOf(key)
+        const out = d.getMonth() !== month
+        const firsts = list.slice(0, 2).map(chip).join('')
+        return `<button class="cd${out ? ' out' : ''}${key === sel ? ' sel' : ''}${key === calDayKey(today) ? ' today' : ''}" data-cald="${key}" data-caldrop="${key}"><b>${d.getDate()}</b>${firsts}${list.length > 2 ? `<u>+${list.length - 2}</u>` : ''}</button>`
+      }).join('')
+    }
+    const dayList = calOf(listDay)
+    const rows = dayList.length
+      ? dayList
+          .map(
+            e => `<div class="r"><div class="grow"><div class="devtitle"><b>${esc(e.title || '')}</b><span class="devmeta">${esc([e.start, e.end].filter(Boolean).join('–'))}</span>${e.repeat && e.repeat !== 'none' ? `<span class="devmeta">${esc(T(`cal.repeat.${e.repeat}`))}</span>` : ''}${e.remind ? `<span class="devmeta">${esc(T('cal.remindBefore', { n: e.remind }))}</span>` : ''}${e.calendar ? `<span class="devmeta">${esc(e.calendar)}</span>` : ''}</div>${extra(e)}</div><button class="pbtn sm" data-caledit="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}">${esc(T('cal.edit'))}</button><button class="pbtn sm" data-caldel="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}">${esc(T('cal.delete'))}</button></div>`,
+          )
+          .join('')
+      : `<div class="note">${esc(T('cal.empty'))}</div>`
+    // A search sees every event, repeats and all, in date order; a hit opens
+    // its day and the edit form.
+    const query = calQuery.trim().toLowerCase()
+    const hits = query
+      ? (calEvents || [])
+          .filter(e => `${e.title || ''} ${e.note || ''}`.toLowerCase().includes(query))
+          .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')) || String(a.start || '').localeCompare(String(b.start || '')))
+      : []
+    const hitRows = hits
+      .slice(0, 40)
+      .map(
+        e => `<div class="r"><div class="grow"><div class="devtitle"><b>${esc(e.title || '')}</b><span class="devmeta">${esc(e.date || '')}</span><span class="devmeta">${esc([e.start, e.end].filter(Boolean).join('–'))}</span></div>${extra(e)}</div><button class="pbtn sm" data-calfind="${esc(String(e.id))}">${esc(T('cal.edit'))}</button></div>`,
+      )
+      .join('')
+    const daySection = query
+      ? `${sec(T('cal.results'))}<div class="grp">${hits.length ? `${hitRows}${hits.length > 40 ? `<div class="note">${esc(T('cal.resultsMore', { n: hits.length - 40 }))}</div>` : ''}` : `<div class="note">${esc(T('cal.searchEmpty'))}</div>`}</div>`
+      : `${sec(T('cal.day'))}<div class="grp">${rows}<div class="r"><span class="grow"></span><button class="pbtn sm" data-caladd>${esc(T('cal.add'))}</button></div></div>`
+    // The whole month, date by date, for the agenda view.
+    const agenda = (() => {
+      const days = new Date(year, month + 1, 0).getDate()
+      const groups = []
+      for (let i = 1; i <= days; i += 1) {
+        const d = new Date(year, month, i)
+        const key = calDayKey(d)
+        const list = calOf(key)
+        if (list.length) groups.push({ d, key, list })
+      }
+      if (!groups.length) return `<div class="note">${esc(T('cal.empty'))}</div>`
+      return groups
+        .map(({ d, key, list }) => `<div class="agenda-date">${esc(d.toLocaleDateString(locale, { year: 'numeric', month: 'long', day: 'numeric' }))}${key === calDayKey(today) ? `<span class="today-tag">${esc(T('cal.today'))}</span>` : ''}</div>${list.map(e => `<div class="agenda-item" style="border-left-color:${colorOf(e)}" data-calfind="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}"><div class="agenda-time">${esc([e.start, e.end].filter(Boolean).join('–'))}</div><div class="agenda-title">${esc(e.title || '')}</div></div>`).join('')}`)
+        .join('')
+    })()
+    const activeAcc = (calAccounts || []).find(a => a.id === calActiveId)
+    const form = calEdit
+      ? `<div class="grp calform">
+        <div class="r"><input class="in" data-caltitle placeholder="${esc(T('cal.fieldTitle'))}" value="${esc(calEdit.title || '')}" maxlength="120"></div>
+        <div class="r"><span class="d">${esc(T('cal.date'))}</span><input class="in d" type="date" data-caldate value="${esc(calEdit.date || calSel || calDayKey(new Date()))}"></div>
+        <div class="r"><span class="d">${esc(T('cal.start'))}</span><input class="in t" type="time" data-calstart value="${esc(calEdit.start || '09:00')}"><span class="d">${esc(T('cal.end'))}</span><input class="in t" type="time" data-calend value="${esc(calEdit.end || '10:00')}"></div>
+        <div class="r"><span class="d">${esc(T('cal.repeat'))}</span><select class="in" data-calrepeat>${['none', 'daily', 'weekly', 'monthly'].map(r => `<option value="${r}"${(calEdit.repeat || 'none') === r ? ' selected' : ''}>${esc(T(`cal.repeat.${r}`))}</option>`).join('')}</select></div>
+        <div class="r"><span class="d">${esc(T('cal.kind'))}</span><select class="in" data-calkind>${['meeting', 'personal', 'holiday', 'review'].map(k => `<option value="${k}"${(calEdit.kind || 'meeting') === k ? ' selected' : ''}>${esc(T(`cal.kind.${k}`))}</option>`).join('')}</select></div>
+        <div class="r"><span class="d">${esc(T('cal.remind'))}</span><select class="in" data-calremind>${[0, 5, 10, 15, 30, 60].map(n => `<option value="${n}"${Number(calEdit.remind || 0) === n ? ' selected' : ''}>${esc(n ? T('cal.remindBefore', { n }) : T('cal.remindNone'))}</option>`).join('')}</select></div>
+        <div class="r"><span class="d">${esc(T('cal.place'))}</span><input class="in" data-calwhere value="${esc(calEdit.where || '')}" maxlength="120"></div>
+        <div class="r"><span class="d">${esc(T('cal.link'))}</span><input class="in" data-callink value="${esc(calEdit.url || '')}" maxlength="300"></div>
+        <div class="r"><input class="in" data-calnote placeholder="${esc(T('cal.fieldNote'))}" value="${esc(calEdit.note || '')}" maxlength="200"></div>
+        <div class="r"><span class="grow"></span>${calEdit?.id ? `<button class="pbtn sm" data-caldelform>${esc(T('cal.delete'))}</button>` : ''}<button class="pbtn sm" data-calcancel>${esc(T('cal.cancel'))}</button><button class="pbtn sm" data-calsave>${esc(T('cal.save'))}</button></div>
+      </div>`
+      : ''
+    // The account setup, shown only when the toolbar's Connection setup asks;
+    // the fields follow the provider, as the panel does.
+    const prov = calAccount?.provider || ''
+    const field = (key, label, value, placeholder = '', type = 'text') =>
+      `<div class="r"><span class="d">${esc(label)}</span><input class="in" data-calf="${key}" type="${type}" value="${esc(value || '')}" placeholder="${esc(placeholder)}"></div>`
+    // URLs in the provider hints are real links: the system browser opens them.
+    const linkify = text =>
+      String(text)
+        .split(/(https?:\/\/[^\s，。；）)]+)/g)
+        .map(part => (/^https?:\/\//.test(part) ? `<button class="link" data-calopen="${esc(part)}">${esc(part)}</button>` : esc(part)))
+        .join('')
+    const connFields =
+      prov === ''
+        ? ''
+        : prov === 'google'
+        ? `${field('url', T('cal.googleId'), calAccount?.url, 'you@gmail.com')}
+           ${field('clientId', 'clientId', calAccount?.clientId, '…apps.googleusercontent.com')}
+           ${field('pass', 'clientSecret', '', T('cal.keep'), 'password')}
+           ${field('refreshToken', 'refreshToken', '', T('cal.keep'))}
+           ${field('tokenUrl', T('cal.tokenUrl'), calAccount?.tokenUrl)}
+           ${field('proxy', T('cal.proxy'), calAccount?.proxy)}`
+        : prov === 'nextcloud'
+          ? `${field('host', T('cal.host'), calAccount?.host, 'https://cloud.example.com')}
+             ${field('user', T('cal.username'), calAccount?.user)}
+             ${field('account', T('cal.authAccount'), calAccount?.account)}
+             ${field('calendar', T('cal.calName'), calAccount?.calendar, 'personal')}
+             ${field('pass', T('cal.password'), '', T('cal.keep'), 'password')}
+             ${field('proxy', T('cal.proxy'), calAccount?.proxy)}`
+          : `${field('url', T('cal.calUrl'), calAccount?.url, 'https://…/')}
+             ${field('user', T('cal.accountName'), calAccount?.user)}
+             ${field('pass', T('cal.password'), '', T('cal.keep'), 'password')}
+             ${field('proxy', T('cal.proxy'), calAccount?.proxy)}`
+    const connForm = `
+        ${(calAccounts || []).map(a => `<div class="r"><span class="grow">${esc(a.provider || '')} · ${esc(a.user || a.url || '')}</span>${a.id === calActiveId ? `<span class="d">${esc(T('cal.current'))}</span>` : `<button class="pbtn sm" data-calaccuse="${esc(String(a.id))}">${esc(T('cal.use'))}</button>`}<button class="pbtn sm" data-calaccedit="${esc(String(a.id))}">${esc(T('cal.edit'))}</button><button class="pbtn sm" data-calaccdel="${esc(String(a.id))}">${esc(T('cal.delete'))}</button></div>`).join('')}
+        <div class="r"><span class="d">${esc(T('cal.newAccount'))}</span><span class="grow"></span><button class="pbtn sm" data-calaccnew>${esc(T('cal.add'))}</button></div>
+        <div class="r"><span class="d">${esc(T('cal.provider'))}</span><select class="in" data-calprovider><option value=""${prov === '' ? ' selected' : ''}>${esc(T('cal.pickProvider'))}</option>${[['google', 'Google'], ['icloud', 'iCloud'], ['nextcloud', 'Nextcloud'], ['custom', T('cal.customCal')]].map(([v, l]) => `<option value="${v}"${prov === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+        ${prov ? `<div class="d calhint">${linkify(T(`cal.hint.${prov}`))}</div>` : ''}
+        ${connFields}
+        <div class="r"><span class="d">${esc(calSyncMsg || T('cal.syncNote'))}</span></div>`
+    return `<div class="grp cal calpage">
+        <div class="r calhead">
+          <b class="caltitle">${esc(T('cal.month'))}</b>
+          <div class="calseg">${['month', 'week', 'day'].map(m => `<button class="seg-btn${calMode === m ? ' on' : ''}" data-calview="${m}">${esc(T(`cal.view.${m}`))}</button>`).join('')}</div>
+          <b class="calmonth">${esc(title)}</b>
+          <button class="pbtn sm" data-cal="prev">‹</button><button class="pbtn sm" data-cal="today">${esc(T('cal.today'))}</button><button class="pbtn sm" data-cal="next">›</button>
+          <span class="grow"></span>
+          <button class="pbtn sm" data-calconn>${esc(T('cal.connect'))}</button>
+          <button class="pbtn sm" data-calics>${esc(T('cal.import'))}</button>
+          <button class="pbtn sm" data-calsync>${esc(T('cal.refresh'))}</button>
+          <button class="pbtn sm lite" data-caladd>${esc(T('cal.newEvent'))}</button>
+        </div>
+        ${calImportOpen ? `<section class="calimport">
+          <h3>${esc(T('cal.importTitle'))}</h3>
+          <p class="calimp-sub">${esc(T('cal.importNote'))}</p>
+          <label class="calimp-label">${esc(T('cal.pickFile'))}<input type="file" accept=".ics,text/calendar" data-calicsfile></label>
+          <label class="calimp-label">${esc(T('cal.pasteIcs'))}<textarea rows="3" spellcheck="false" data-calicstext></textarea></label>
+          <label class="calimp-label">${esc(T('cal.timezone'))}<select data-calicszone><option value="">${esc(T('cal.pickTz'))}</option>${calZoneOptions()}</select></label>
+          <p class="calimp-sub">${esc(T('cal.importLimit'))}</p>
+          ${Array.isArray(calImportPreview) ? `<p class="calimp-sub">${esc(T(calImportPreview.length ? 'cal.importFound' : 'cal.importNone', { n: calImportPreview.length }))}</p>` : ''}
+          ${Array.isArray(calImportPreview) && calImportPreview.length ? `<div class="calimp-list">${calImportPreview.slice(0, 20).map(e => `<div class="calimp-row"><span class="calimp-when">${esc([e.date, e.start].filter(Boolean).join(' '))}</span><span class="calimp-title">${esc(e.title || '')}</span></div>`).join('')}${calImportPreview.length > 20 ? `<div class="calimp-sub">+${calImportPreview.length - 20}</div>` : ''}</div>` : ''}
+          <div class="calimp-actions"><button class="pbtn sm" data-calicscheck>${esc(T('cal.preview'))}</button>${Array.isArray(calImportPreview) && calImportPreview.length ? `<button class="pbtn sm" data-calicsdo>${esc(T('cal.importDo'))}</button>` : ''}<button class="pbtn sm" data-calicsclose>${esc(T('cal.closeImport'))}</button></div>
+        </section>` : ''}
+        ${calMode === 'week' ? weekView : cells ? `<div class="calgrid${gridClass}">${head.map(h => `<span class="ch">${esc(h)}</span>`).join('')}${cells}</div>` : ''}
+        ${calMode === 'week' ? `<div class="wkhint">${esc(T('cal.weekHint'))}</div>` : ''}
+        ${calMode === 'day' ? agenda : ''}
+        <div class="calfoot"><span>${esc(T('cal.count', { n: (calEvents || []).length }))}</span><span>${esc(T('cal.currentAcc', { name: activeAcc ? `${activeAcc.provider} · ${activeAcc.user || activeAcc.url}` : '' }))}</span></div>
+      </div>
+      ${form ? `<div class="mcpmask" data-calmask><div class="mcpmodal calmodal">${form}</div></div>` : ''}
+      ${calConnOpen ? `<div class="mcpmask" data-calconnmask><div class="mcpmodal calmodal connmodal">
+        <div class="mcpmodal-h"><b>${esc(T('cal.connTitle'))}</b><button class="pbtn sm" data-calconnclose>×</button></div>
+        <div class="d">${esc(T('cal.connNote'))}</div>
+        ${connForm}
+        <div class="r"><span class="grow"></span><button class="pbtn sm" data-calconnclose>${esc(T('cal.cancel'))}</button><button class="pbtn sm" data-caltest>${esc(T('cal.test'))}</button><button class="pbtn sm" data-calaccsave>${esc(T('cal.saveEnable'))}</button></div>
+      </div></div>` : ''}`
+  }
+
+  // The MCP page: Wakuwaku's own MCP server (mcp.rs) — the command an agent
+  // runs for itself, the tools it offers, and where each agent puts it.
+  function pageMcp() {
+    const exe = snap.exe || 'wakuwaku.exe'
+    const command = `"${exe}" --mcp`
+    const claude = `claude mcp add --scope user wakuwaku -- "${exe}" --mcp`
+    const config = JSON.stringify({ mcpServers: { wakuwaku: { command: exe, args: ['--mcp'] } } }, null, 2)
+    const tools = [
+      ['wakuwaku_sessions', 'mcp.tool.sessions'],
+      ['wakuwaku_notify', 'mcp.tool.notify'],
+      ['wakuwaku_mail', 'mcp.tool.mail'],
+      ['wakuwaku_mail_read', 'mcp.tool.read'],
+      ['wakuwaku_mail_send', 'mcp.tool.send'],
+      ['wakuwaku_devservers', 'mcp.tool.devservers'],
+      ['wakuwaku_devserver_start', 'mcp.tool.start'],
+      ['wakuwaku_calendar', 'mcp.tool.calendar'],
+      ['wakuwaku_calendar_add', 'mcp.tool.calendarAdd'],
+      ['wakuwaku_calendar_update', 'mcp.tool.calendarUpdate'],
+      ['wakuwaku_calendar_delete', 'mcp.tool.calendarDelete'],
+      ['wakuwaku_health', 'mcp.tool.health'],
+    ]
+    const on = snap.settings.mcpOn !== false
+    return `<div class="mcphead"><span class="label">${esc(T('mcp.name'))}</span><span class="grow"></span><span class="d">${esc(mcpNote)}</span><button class="pbtn sm" data-mcpadd>+ ${esc(T('mcp.add'))}</button></div>
+      <div class="mcpcard${on ? '' : ' off'}${mcpOpen ? '' : ' folded'}">
+        <div class="mcph" data-mcpfold>
+          <span class="mcp-arrow">▼</span>
+          <span class="mcp-logo">W</span>
+          <span class="mcp-id"><b>${esc(T('mcp.name'))}</b><span class="mcp-tag">${esc(T('mcp.custom'))}</span><span class="mcp-check">✓</span></span>
+          <span class="grow"></span>
+          <span class="mcp-count">${tools.length} ${esc(T('mcp.toolCount'))}</span>
+          <button class="mcp-gear" data-mcpadd title="${esc(T('mcp.manual'))}">⚙</button>
+          <button class="sw${on ? ' on' : ''}" data-mcpon title="${esc(on ? T('mcp.on') : T('mcp.off'))}"></button>
+        </div>
+        <div class="mcpbody">
+          <div class="mcpcmd"><span class="mono">${esc(command)}</span><button class="pbtn sm" data-copy="${esc(command)}">${esc(T('home.copy'))}</button></div>
+          <div class="mcpcmd"><span class="grow d">${esc(T('mcp.claudeHint'))}</span><button class="pbtn sm" data-copy="${esc(claude)}">${esc(T('home.copy'))}</button></div>
+          <div class="mtools">${tools.map(([name, key]) => `<div class="mtrow"><div class="mtn mono">${esc(name)}</div><div class="mtd">${esc(T(key))}</div></div>`).join('')}</div>
+        </div>
+      </div>
+      ${mcpModal ? `<div class="mcpmask" data-mcpmask>
+        <div class="mcpmodal">
+          <div class="mcpmodal-h"><b>${esc(T('mcp.manual'))}</b><button class="pbtn sm" data-mcpclose>×</button></div>
+          <div class="d">${esc(T('mcp.manualNote'))}</div>
+          <pre class="mcpcode mono">${esc(config)}</pre>
+          <div class="r"><span class="grow"></span><button class="pbtn sm" data-mcpclose>${esc(T('cal.cancel'))}</button><button class="pbtn sm" data-copy="${esc(config)}">${esc(T('home.copy'))}</button></div>
+        </div>
+      </div>` : ''}`
+  }
+
   function pageWidgets() {
     const s = snap.settings
     const left = ms => (ms >= 60000 ? T('settings.minutes', { n: Math.round(ms / 60000) }) : T('settings.seconds', { n: Math.max(1, Math.round(ms / 1000)) }))
@@ -1679,31 +2095,147 @@
     noteFor({ text: T(`mail.w.sent.${got.kept || 'server'}`), bad: got.kept === 'failed' })
   }
 
+  // Whose letter: the sender's face at its head, as a mail program has one.
+  // No picture is asked of any server (they are not to be had, and a letter
+  // is read without telling its sender it was opened): the first letter of
+  // the name, on the colour of the address, the same address always the
+  // same one.
+  function avatarHTML(l) {
+    const from = (l.from || [])[0] || {}
+    const name = String(from.name || from.address || '').trim()
+    const first = Array.from(name)[0] || '?'
+    let hash = 0
+    for (const ch of String(from.address || name)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+    return `<span class="av" style="--av-h:${hash % 360}" aria-hidden="true">${esc(first.toLocaleUpperCase())}</span>`
+  }
+
   // A letter open: back to the inbox, its star and the hand-off, who, when,
   // its attachments, the talk about it, the text.
-  function readingHTML() {
+  // Beside the list (two panes) the bar is kept above the scrolling part, so
+  // the star, Reply and the hand-off stay at hand however far down the letter
+  // is read (the user, 2026-10-21). Its top is the left list's top: the bar
+  // and the inbox's head are the same height, so both cards begin together.
+  function readingHTML(note = '') {
     const r = reading
     const l = r.letter
     const talk = l ? talkOf(l.key) || r.talk : null
     // Beside the list (two panes) there is no inbox to go back to.
-    const back = twoPanes() ? '' : `<span class="link" data-mail-back>‹ ${esc(T('mail.inbox'))}</span>`
+    const two = twoPanes()
+    const back = two ? '' : `<span class="link" data-mail-back>‹ ${esc(T('mail.inbox'))}</span>`
     const bar = `<div class="mail-bar">${back}<span class="grow"></span>${l ? handButtons(l, talk) : ''}</div>`
-    const note = handNote && !twoPanes() ? `<div class="note${handNote.bad ? ' err' : ''}">${esc(handNote.text)}</div>` : ''
-    if (r.busy) return `${bar}<div class="grp"><div class="note">${esc(T('mail.opening'))}</div></div>`
-    if (r.error) return `${bar}<div class="grp"><div class="note err">${esc(handError(r.error))}</div></div>`
+    const hand = handNote && !two ? `<div class="note${handNote.bad ? ' err' : ''}">${esc(handNote.text)}</div>` : ''
+    // Two panes: the bar stays, the letter (and the note about its hand-off)
+    // scrolls under it. One pane: the whole page scrolls, as it did.
+    const wrap = inner => (two ? `${bar}<div class="pane-r-body">${note}${inner}</div>` : `${bar}${hand}${inner}`)
+    if (r.busy) return wrap(`<div class="grp"><div class="note">${esc(T('mail.opening'))}</div></div>`)
+    if (r.error) return wrap(`<div class="grp"><div class="note err">${esc(handError(r.error))}</div></div>`)
     const files = l.attachments.length ? `<div class="m-files">${l.attachments.map(f => `<span class="chip">📎 ${esc(f.name || '?')} · ${mailSize(f.size)}</span>`).join('')}</div>` : ''
     // Whose (several accounts), and one's own, from Sent.
     const address = accountOf(l.account)?.address || ''
     const inSent = l.folder === 'sent' ? T('mail.inSent', { address }) : ''
     const whose = inSent || (snap.mail || []).length > 1 ? `<div class="d">${esc(inSent || T('mail.in', { address }))}</div>` : ''
-    return `${bar}${note}<div class="grp mail-read" ${where(l)}>
+    return wrap(`<div class="grp mail-read" ${where(l)}>
       <div class="m-subj">${esc(l.subject || T('mail.noSubject'))}</div>
-      <div class="d">${esc(people(l.from))} · ${esc(mailDate(l.date, true))}</div>
+      <div class="from">${avatarHTML(l)}<div class="grow"><div class="who">${esc(people(l.from))}</div><div class="d">${esc(mailDate(l.date, true))}</div></div></div>
       ${l.to.length ? `<div class="d">${esc(T('mail.to'))}: ${esc(people(l.to))}</div>` : ''}
       ${l.cc.length ? `<div class="d">${esc(T('mail.cc'))}: ${esc(people(l.cc))}</div>` : ''}
       ${whose}${files}${talk ? talkHTML(talk, l) : ''}
-      <div class="m-text">${esc(l.text)}</div>${l.cut ? `<div class="d">${esc(T('mail.cut'))}</div>` : ''}
-    </div>`
+      ${mailBodyHTML(l)}
+    </div>`)
+  }
+
+  // The letter's body: as it was written (its styles, its cards, its
+  // pictures), in a frame that cannot run anything, or the plain text when
+  // there is no HTML. The frame is sandboxed: no scripts, no forms, nothing
+  // of hers in it. Its pictures are the letter's own (the sender's server),
+  // so they are read as they come. The text it was written with is not put
+  // under it: a letter shows as its sender made it (the user, 2026-10-20).
+  function mailBodyHTML(l) {
+    const html = String(l.html || '')
+    if (!html.trim()) {
+      return `<div class="m-text">${esc(l.text)}</div>${l.cut ? `<div class="d">${esc(T('mail.cut'))}</div>` : ''}`
+    }
+    // The frame's own document: the letter, and a little of her own page
+    // around it (the letter's own styles are in it, and they win). The
+    // frame is sandboxed without scripts: what is in it cannot run, and the
+    // page can still measure it (the same origin, no scripts) to give it
+    // the height of the letter.
+    const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src http: https: data: cid:; style-src 'unsafe-inline'; font-src data:"><style>
+      html,body{width:100%;max-width:100%;margin:0;padding:0;overflow-x:hidden;background:transparent;color:inherit;font:inherit;line-height:inherit}
+      /* A letter made for a 600px inbox is read in a pane narrower or wider
+         than that: whatever it was laid out at gives way to the frame, so
+         nothing runs off the right and is cut (the user, 2026-10-21). */
+      *,*::before,*::after{box-sizing:border-box;max-width:100%!important;min-width:0!important}
+      img,video,svg,canvas,iframe{height:auto!important}
+      td,th,div,p,span,a,li{overflow-wrap:anywhere}
+      a{color:#5e9eff}
+    </style></head><body>${html}</body></html>`
+    return `<div class="m-html-wrap"><iframe class="m-html" sandbox="allow-same-origin" referrerpolicy="no-referrer" scrolling="no" title="${esc(l.subject || T('mail.noSubject'))}" srcdoc="${esc(doc)}"></iframe></div>`
+  }
+
+  // The frame as tall as the letter in it: the page measures it (the frame
+  // is of her own origin and runs nothing) and gives it the height. Measured
+  // again as its pictures arrive and its fonts settle — the first measure is
+  // of a letter whose pictures are not there yet, and a letter 3,000px tall
+  // was left showing its first 160 (the user's letter, 2026-10-20). A letter
+  // longer than 4,000px is cut there; the panel's own scroll goes on.
+  //
+  // The document a frame starts with (about:blank, already "complete") is
+  // not the letter's: watching it missed every picture the letter brought,
+  // and a cold letter stayed 992px tall with 1,149px of itself under
+  // (2026-10-21). So the watch is put on the document the frame has when it
+  // runs and again whenever that document is replaced; a load anywhere in
+  // the document (a picture, a font) measures it again. Timed measures run
+  // further out too, for what loads late and says nothing.
+  function fitFrames() {
+    for (const frame of body.querySelectorAll('iframe.m-html')) {
+      // A letter can carry a rule of its own that outweighs the frame's
+      // stylesheet (a 600px wrapper marked !important in a 542px frame ran
+      // 58px off the right and was cut). What is still wider than the frame
+      // is given its width inline, which nothing in the letter can outweigh
+      // (the user, 2026-10-21).
+      const fitWidth = doc => {
+        const w = doc.documentElement.clientWidth
+        if (!w) return
+        for (const el of doc.body.querySelectorAll('table,img,div')) {
+          if (el.getBoundingClientRect().width <= w + 1) continue
+          el.style.setProperty('max-width', '100%', 'important')
+          el.style.setProperty(el.tagName === 'IMG' ? 'height' : 'width', el.tagName === 'IMG' ? 'auto' : '100%', 'important')
+        }
+      }
+      const fit = () => {
+        if (!frame.isConnected) return
+        try {
+          const doc = frame.contentDocument
+          if (!doc || !doc.body) return
+          fitWidth(doc)
+          const h = Math.min(4000, Math.max(120, doc.body.scrollHeight + 8))
+          if (frame.style.height !== `${h}px`) frame.style.height = `${h}px`
+        } catch (e) {
+          // The frame's document is not to be read (it is of another origin,
+          // or it is not ready): the height it has is left as it is.
+        }
+      }
+      const watch = () => {
+        fit()
+        try {
+          const doc = frame.contentDocument
+          if (!doc || frame._fitDoc === doc) return
+          frame._fitDoc = doc
+          doc.addEventListener('load', fit, true)
+          doc.addEventListener('error', fit, true)
+          doc.fonts?.ready?.then(fit).catch(() => {})
+        } catch (e) {}
+      }
+      frame._fit = watch
+      if (!frame._fitHooked) {
+        frame._fitHooked = true
+        frame.addEventListener('load', () => frame._fit?.())
+      }
+      watch()
+      for (const t of frame._fitTimers || []) clearTimeout(t)
+      frame._fitTimers = [250, 900, 2200, 5000, 10000, 20000].map(ms => setTimeout(() => frame.isConnected && frame._fit?.(), ms))
+    }
   }
 
   // Mail: each account with its switch and setting one up; the inbox
@@ -1717,8 +2249,9 @@
       if (id && inbox.for !== `${id}|${inbox.filter}` && !inbox.busy) setTimeout(() => loadInbox(false))
       const left = id ? inboxHTML(id) : `<div class="note">${esc(T('mail.noBox'))}</div>`
       const note = handNote ? `<div class="note${handNote.bad ? ' err' : ''}">${esc(handNote.text)}</div>` : ''
-      const right = writing && draft ? writeHTML() : reading ? readingHTML() : `${accountsHTML()}${id ? agentsHTML() : ''}`
-      return `<div class="panes"><div class="pane-l">${left}</div><div class="pane-r">${note}${right}</div></div>`
+      const body = inner => `<div class="pane-r-body">${note}${inner}</div>`
+      const right = writing && draft ? body(writeHTML()) : reading ? readingHTML(note) : body(`${accountsHTML()}${id ? agentsHTML() : ''}`)
+      return `<div class="panes"><div class="pane-l">${left}</div><div class="pane-r">${right}</div></div>`
     }
     if (writing && draft) return writeHTML()
     if (reading) return readingHTML()
@@ -2458,7 +2991,7 @@
       ${aboutHTML()}`
   }
 
-  const PAGES = { now: pageGeneral, agents: pageAgents, look: pageLook, widgets: pageWidgets, mail: pageMail }
+  const PAGES = { now: pageGeneral, agents: pageAgents, look: pageLook, widgets: pageWidgets, mcp: pageMcp, calendar: pageCalendar, mail: pageMail }
 
   // --- Drawing --------------------------------------------------------------------------------
 
@@ -2497,17 +3030,21 @@
   // The page, kept as it is when nothing changed; redrawn, the box being
   // typed in (the download box, a plugin's setting, the mail proxy's
   // address) gets the focus and the caret back.
-  function drawBody(reset) {
+  function drawBody(reset, fresh = drawnTab !== tab) {
     const box = body.contains(document.activeElement) && document.activeElement.matches('input, textarea') ? document.activeElement : null
     const which =
       box &&
       (box.id ? `#${box.id}` : box.dataset.field ? `[data-field="${box.dataset.field}"]` : box.dataset.mon ? `[data-mon="${box.dataset.mon}"]` : box.dataset.mf ? `[data-mf="${box.dataset.mf}"]` : box.dataset.w ? `[data-w="${box.dataset.w}"]` : box.dataset.proxyAt !== undefined ? '[data-proxy-at]' : null)
     const caret = which ? box.selectionStart : null
-    const changed = setHTML(body, PAGES[tab]())
+    // Another page: it is put in whole, not made out of the old one (see
+    // setHTML). The page it was on is kept, so that coming back to it keeps
+    // what was typed in it.
+    drawnTab = tab
+    const changed = setHTML(body, PAGES[tab](), fresh)
     if (reset) {
       body.scrollTop = 0
       // Two panes: what is on the right from its top; the list stays where it was.
-      const right = body.querySelector('.pane-r')
+      const right = body.querySelector('.pane-r-body') || body.querySelector('.pane-r')
       if (right) right.scrollTop = 0
     }
     if (!changed) return
@@ -2521,18 +3058,50 @@
       back.setSelectionRange(caret, caret)
     }
     startThumbs()
+    fitFrames()
+  }
+
+  // The panel's width: at once when the page changed, so the one frame that
+  // is drawn is the one the page is laid out in; over the spring otherwise
+  // (opening, closing), the same spring the island's box has. A width sprung
+  // around content that re-wraps with every step of it read as a flicker
+  // (the user, 2026-10-20).
+  function setPanelWidth(width, atOnce) {
+    if (layer.style.width === width) return
+    if (!atOnce) {
+      layer.style.width = width
+      return
+    }
+    const had = layer.style.transition
+    layer.style.transition = 'none'
+    layer.style.width = width
+    void layer.offsetWidth
+    layer.style.transition = had
   }
 
   function draw(reset = false) {
     if (!isOpen || !snap) return
     lang = snap.lang || lang
-    // The Mail page in two panes is wider.
-    const wide = twoPanes()
+    // Another page: its width is taken in the frame it is drawn in, and the
+    // island's box and its window take it in that same frame (island.js
+    // snap) — nothing of the old page is left showing through a box still
+    // growing around the new one. Opening is not a page turned: the panel
+    // still grows out of the island there, with its spring.
+    const fresh = drawnTab !== tab
+    const turned = fresh && Date.now() - openedAt > 700
+    // The Mail page in two panes is wider; the Calendar page too, on its own,
+    // so a month, its day and the forms are not squeezed into a narrow column.
+    const wide = twoPanes() || (tab === 'calendar' && roomForTwo())
     layer.classList.toggle('wide', wide)
-    layer.style.width = wide ? `${Math.min(WIDE_W, screen.availWidth - 40)}px` : ''
+    // The width the page wants, as a number: the island's window is made for
+    // it (the width it is at while the spring runs is not the one it is
+    // going to be), and the panel grows into the window with the same spring.
+    calWidth = wide ? Math.min(tab === 'calendar' ? 1100 : WIDE_W, screen.availWidth - 40) : 0
+    setPanelWidth(wide ? `${calWidth}px` : '', turned)
+    if (turned) window.Island?.snap?.()
     drawHead()
     drawTabs()
-    drawBody(reset)
+    drawBody(reset, fresh)
     // Locked (the button by ✕), a click outside closes them no more.
     foot.querySelector('.foot-text').textContent = T(snap.settings.settingsPin ? 's.footLocked' : 's.foot')
     foot.querySelector('.ver').textContent = `v${snap.version}`
@@ -2544,7 +3113,14 @@
     // than the home keeps room for (the taskbar's): a page scrolls inside.
     const rest = layer.offsetHeight - body.offsetHeight
     const most = window.Island?.settingsMax?.() ?? screen.availHeight - 56
-    body.style.height = `${Math.max(160, Math.min(460, most - rest))}px`
+    if (tab === 'calendar') {
+      // The calendar fits its own content; a fixed height leaves black under it.
+      body.style.height = 'auto'
+      body.style.maxHeight = `${Math.max(160, most - rest)}px`
+    } else {
+      body.style.height = `${Math.max(160, Math.min(460, most - rest))}px`
+      body.style.maxHeight = ''
+    }
     window.Island?.changed()
   }
 
@@ -2593,6 +3169,11 @@
     isOpen = true
     if (!wasOpen) openedAt = Date.now()
     if (!wasOpen) {
+      // The page rises into place as the panel opens, and once only: turning
+      // to another page puts it in at once (settings.css).
+      layer.classList.add('opening')
+      clearTimeout(openingTimer)
+      openingTimer = setTimeout(() => layer.classList.remove('opening'), 420)
       window.pet.keyboard(true)
       clearInterval(clockTimer)
       clockTimer = setInterval(tick, 1000)
@@ -2625,6 +3206,8 @@
     if (!isOpen) return
     console.log('settings close:', why)
     isOpen = false
+    layer.classList.remove('opening')
+    clearTimeout(openingTimer)
     // The welcome opened again only for this time: "not now" said since
     // (the island's 不用提醒), the next open shows it folded (the test session).
     welcomeOpen = false
@@ -2738,6 +3321,200 @@
   }
 
   // --- Clicks and keys ----------------------------------------------------------------------------
+
+  // A calendar event dragged onto another day keeps its time and moves its
+  // date. The account it is in goes with it: the same event may be in two
+  // accounts, and moving one must not move the other's.
+  layer.addEventListener('dragstart', e => {
+    const chip = e.target.closest?.('[data-caldrag]')
+    if (!chip) return
+    calDrag = { id: String(chip.dataset.caldrag), account: String(chip.dataset.calacc || '') }
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', calDrag.id)
+    }
+  })
+  layer.addEventListener('dragover', e => {
+    if (!calDrag || !e.target.closest?.('[data-caldrop]')) return
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  })
+  layer.addEventListener('drop', e => {
+    const cell = e.target.closest?.('[data-caldrop]')
+    if (!cell || !calDrag) return
+    e.preventDefault()
+    const { id, account } = calDrag
+    calDrag = null
+    const day = cell.dataset.caldrop
+    calSel = day
+    return calSave((calEvents || []).map(x => (CalWeek.sameEvent(x, id, account) ? { ...x, date: day } : x)))
+  })
+  layer.addEventListener('dragend', () => {
+    calDrag = null
+  })
+
+  // --- The week view: move an event, change how long it lasts, nudge it ------
+
+  // What a week block carries while it is being moved: its id, how long it
+  // lasts, and where the pointer started, so the drop knows which hour the
+  // top should land on (the block's own top, not the pointer's, keeps its
+  // length from shifting with the grab point).
+  layer.addEventListener('dragstart', e => {
+    const block = e.target.closest?.('.wkev')
+    if (!block) return
+    const id = block.dataset.calfind
+    const ev = calById(id)
+    if (!ev || !ev.start) return
+    calWeekDrag = { id, account: String(block.dataset.calacc || ''), startMin: calMin(ev.start), length: CalWeek.lengthOf(ev) }
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', String(id))
+    }
+  })
+  // Where a dragged block would land: the column it is over, and the quarter
+  // hour its top lines up with.
+  layer.addEventListener('dragover', e => {
+    if (!calWeekDrag) return
+    const col = e.target.closest?.('.wkcol[data-calweekdrop]')
+    if (!col) return
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+    const rect = col.getBoundingClientRect()
+    const grab = calWeekDrag.startMin - calMin(calById(calWeekDrag.id, calWeekDrag.account)?.start)
+    const min = Math.max(0, calPxToMin(e.clientY - rect.top) - grab)
+    layer.querySelectorAll('.wkghost').forEach(g => g.remove())
+    const ghost = document.createElement('i')
+    ghost.className = 'wkghost'
+    ghost.style.top = `${calMinToPx(min)}px`
+    ghost.style.height = `${calMinToPx(calWeekDrag.length)}px`
+    col.appendChild(ghost)
+  })
+  layer.addEventListener('drop', e => {
+    if (!calWeekDrag) return
+    const col = e.target.closest?.('.wkcol[data-calweekdrop]')
+    layer.querySelectorAll('.wkghost').forEach(g => g.remove())
+    if (!col) {
+      calWeekDrag = null
+      return
+    }
+    e.preventDefault()
+    e.stopPropagation()
+    const { id, account, startMin, length } = calWeekDrag
+    calWeekDrag = null
+    const day = col.dataset.calweekdrop
+    // Where the pointer grabbed the block, in minutes from its top: dropping
+    // the top where that same point now is keeps the length and the grab.
+    const grab = startMin - calMin(calById(id, account)?.start)
+    const at = calPxToMin(e.clientY - col.getBoundingClientRect().top) - grab
+    calSel = day
+    const next = CalWeek.move(calEvents, id, day, at, account)
+    if (next) calSave(next)
+  })
+  layer.addEventListener('dragend', () => {
+    calWeekDrag = null
+    layer.querySelectorAll('.wkghost').forEach(g => g.remove())
+  })
+
+  // The grip at a block's bottom changes how long it lasts: the end follows
+  // the pointer, snapped to a quarter hour, never before the start.
+  let calGrip = null
+  layer.addEventListener('pointerdown', e => {
+    const grip = e.target.closest?.('[data-calresize]')
+    if (!grip) return
+    const block = grip.closest('.wkev')
+    const ev = calById(block?.dataset.calfind, block?.dataset.calacc)
+    if (!ev || !ev.start) return
+    e.preventDefault()
+    e.stopPropagation()
+    calGrip = { id: ev.id, account: String(ev.account || ''), startMin: calMin(ev.start), top: e.clientY, endMin: calMin(ev.end ?? ev.start) }
+  })
+  layer.addEventListener('pointermove', e => {
+    if (!calGrip) return
+    const dy = e.clientY - calGrip.top
+    calGrip.endMin = Math.max(calGrip.startMin + SNAP, calGrip.endMin + (dy / HOUR_PX) * 60)
+    const block = layer.querySelector(`.wkev[data-calfind="${CSS.escape(String(calGrip.id))}"]`)
+    if (block) block.style.height = `${Math.max(20, calMinToPx(calGrip.endMin - calGrip.startMin))}px`
+  })
+  const endGrip = () => {
+    if (!calGrip) return
+    const { id, account, endMin } = calGrip
+    calGrip = null
+    const next = CalWeek.resize(calEvents, id, endMin, account)
+    if (next) calSave(next)
+  }
+  layer.addEventListener('pointerup', endGrip)
+  layer.addEventListener('pointercancel', endGrip)
+
+  // A block with the keyboard: up and down move it a quarter hour (a whole
+  // one with Shift), left and right move it a day. Held keys repeat the way
+  // the browser repeats anything; each step lands on the quarter hour.
+  layer.addEventListener('keydown', e => {
+    const block = e.target.closest?.('.wkev')
+    if (!block) return
+    const ev = calById(block.dataset.calfind, block.dataset.calacc)
+    if (!ev || !ev.start) return
+    const step = e.shiftKey ? 60 : SNAP
+    const account = String(ev.account || '')
+    let next = null
+    if (e.key === 'ArrowUp') next = CalWeek.move(calEvents, ev.id, ev.date, calMin(ev.start) - step, account)
+    else if (e.key === 'ArrowDown') next = CalWeek.move(calEvents, ev.id, ev.date, calMin(ev.start) + step, account)
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const d = calDate(ev.date)
+      d.setDate(d.getDate() + (e.key === 'ArrowLeft' ? -1 : 1))
+      next = CalWeek.move(calEvents, ev.id, calDayKey(d), calMin(ev.start), account)
+    } else return
+    e.preventDefault()
+    if (next) {
+      calSel = ev.date
+      calSave(next)
+    }
+  })
+
+  // The calendar's search: looked up a moment after the last key, so typing
+  // does not redraw under the pointer.
+  let calSearchTimer = 0
+  layer.addEventListener('input', e => {
+    const box = e.target.closest?.('[data-calsearch]')
+    if (!box) return
+    clearTimeout(calSearchTimer)
+    const value = box.value
+    calSearchTimer = setTimeout(() => {
+      calQuery = value
+      draw()
+    }, 250)
+  })
+  // A provider picked in the connection modal: its fields at once.
+  layer.addEventListener('change', e => {
+    const file = e.target.closest?.('[data-calicsfile]')
+    if (file) {
+      const chosen = file.files?.[0]
+      if (chosen) {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const box = document.querySelector('#island-settings [data-calicstext]')
+          if (box) box.value = String(reader.result || '')
+        }
+        reader.readAsText(chosen)
+      }
+      return
+    }
+    const pick = e.target.closest?.('[data-calprovider]')
+    if (!pick) return
+    calAccount = { ...(calAccount || {}), provider: pick.value }
+    draw()
+  })
+  // Double-clicking a day (or its event) opens the event window.
+  layer.addEventListener('dblclick', e => {
+    const cell = e.target.closest?.('[data-cald]')
+    if (!cell) return
+    const chip = e.target.closest?.('[data-caldrag]')
+    const id = chip?.dataset.caldrag
+    calSel = cell.dataset.cald
+    calEdit = id
+      ? (calEvents || []).find(x => String(x.id) === id) || null
+      : { id: null, date: calSel, start: '09:00', end: '10:00', repeat: 'none', remind: 0, kind: 'meeting', title: '', note: '', where: '', url: '' }
+    if (calEdit) draw()
+  })
 
   layer.addEventListener('click', e => {
     const at = selector => e.target.closest(selector)
@@ -2924,6 +3701,294 @@
     if (at('[data-more]')) return loadGallery(true)
     const copyButton = at('[data-copy]')
     if (copyButton) return copy(copyButton.dataset.copy, copyButton)
+    // The MCP card: folded, turned off, or its manual configuration.
+    if (at('[data-mcpon]')) {
+      return patch({ mcpOn: snap.settings.mcpOn === false })
+    }
+    if (at('[data-mcpadd]')) {
+      mcpNote = T('mcp.soon')
+      return draw()
+    }
+    if (at('[data-mcpclose]') || e.target.matches?.('[data-mcpmask]')) {
+      mcpModal = false
+      return draw()
+    }
+    if (at('[data-mcpfold]')) {
+      mcpOpen = !mcpOpen
+      return draw()
+    }
+    // The calendar's view (month, week, day), its month turned, or today.
+    if (e.target.matches?.('[data-calmask]')) {
+      calEdit = null
+      return draw()
+    }
+    if (at('[data-calics]')) {
+      calImportOpen = true
+      return draw()
+    }
+    if (at('[data-calicscheck]')) {
+      const text = document.querySelector('#island-settings [data-calicstext]')?.value || ''
+      if (!text.trim()) return draw()
+      return window.pet.calendar.importText(text).then(got => {
+        calImportPreview = got.ok ? got.events : []
+        draw()
+      })
+    }
+    if (at('[data-calicsdo]')) {
+      const have = new Set((calEvents || []).map(e => String(e.id)))
+      const merged = [...(calEvents || [])]
+      for (const e of calImportPreview || []) {
+        if (!have.has(String(e.id))) {
+          merged.push(e)
+          have.add(String(e.id))
+        }
+      }
+      calImportPreview = null
+      calImportOpen = false
+      return calSave(merged)
+    }
+    if (at('[data-calicsclose]')) {
+      calImportOpen = false
+      calImportPreview = null
+      return draw()
+    }
+    if (at('[data-calconn]')) {
+      calConnOpen = true
+      return draw()
+    }
+    if (at('[data-calconnclose]') || e.target.matches?.('[data-calconnmask]')) {
+      calConnOpen = false
+      return draw()
+    }
+    const calView = at('[data-calview]')
+    if (calView) {
+      calMode = calView.dataset.calview
+      if (calMode === 'month') calAt = new Date(calAt.getFullYear(), calAt.getMonth(), 1)
+      else calSel = calDayKey(calAt)
+      return draw()
+    }
+    const cal = at('[data-cal]')
+    if (cal) {
+      const what = cal.dataset.cal
+      if (what === 'today') {
+        calAt = new Date()
+        calSel = calDayKey(calAt)
+      } else {
+        const step = what === 'next' ? 1 : -1
+        if (calMode === 'month') calAt = new Date(calAt.getFullYear(), calAt.getMonth() + step, 1)
+        else if (calMode === 'week') calAt = new Date(calAt.getFullYear(), calAt.getMonth(), calAt.getDate() + 7 * step)
+        else calAt = new Date(calAt.getFullYear(), calAt.getMonth(), calAt.getDate() + step)
+        if (calMode !== 'month') calSel = calDayKey(calAt)
+      }
+      return draw()
+    }
+    const calDay = at('[data-cald]')
+    if (calDay) {
+      calSel = calDay.dataset.cald
+      calEdit = null
+      return draw()
+    }
+    if (at('[data-calsearchclear]')) {
+      calQuery = ''
+      return draw()
+    }
+    const calOpen = at('[data-calopen]')
+    if (calOpen) {
+      return window.pet.calendar.openExternal(calOpen.dataset.calopen)
+    }
+    const calFind = at('[data-calfind]')
+    if (calFind) {
+      // The account too: the same event may be in two accounts, and which
+      // one was pressed is what says which one to open.
+      const wanted = calFind.dataset.calacc || ''
+      const found = (calEvents || []).find(e => String(e.id) === calFind.dataset.calfind && (!wanted || String(e.account || '') === wanted))
+      if (found) {
+        const day = calDate(found.date)
+        if (!isNaN(day)) calAt = day
+        calSel = found.date || calSel
+        calQuery = ''
+        calEdit = found
+      }
+      return draw()
+    }
+    if (at('[data-caladd]')) {
+      calEdit = { id: null, date: calSel || calDayKey(new Date()), start: '09:00', end: '10:00', repeat: 'none', remind: 0, kind: 'meeting', title: '', note: '', where: '', url: '' }
+      return draw()
+    }
+    const calEditAt = at('[data-caledit]')
+    if (calEditAt) {
+      const wanted = calEditAt.dataset.calacc || ''
+      calEdit = (calEvents || []).find(e => String(e.id) === calEditAt.dataset.caledit && (!wanted || String(e.account || '') === wanted)) || null
+      return draw()
+    }
+    if (at('[data-caldelform]')) {
+      // Only this one event, in this account: another account's copy of the
+      // same event stays where it is.
+      const id = String(calEdit?.id || '')
+      const account = String(calEdit?.account || '')
+      calEdit = null
+      return calSave((calEvents || []).filter(e => !(String(e.id) === id && String(e.account || '') === account)))
+    }
+    if (at('[data-calcancel]')) {
+      calEdit = null
+      return draw()
+    }
+    const calDel = at('[data-caldel]')
+    if (calDel) {
+      const id = String(calDel.dataset.caldel || '')
+      const account = String(calDel.dataset.calacc || '')
+      return calSave((calEvents || []).filter(e => !(String(e.id) === id && (!account || String(e.account || '') === account))))
+    }
+    if (at('[data-calsave]')) {
+      const val = sel => document.querySelector(`#island-settings ${sel}`)?.value || ''
+      const e = {
+        ...(calEdit || {}),
+        id: calEdit?.id || Date.now(),
+        account: calEdit?.account || calActiveId,
+        date: val('[data-caldate]') || calEdit?.date || calSel || calDayKey(new Date()),
+        title: val('[data-caltitle]').trim(),
+        start: val('[data-calstart]'),
+        end: val('[data-calend]'),
+        repeat: val('[data-calrepeat]') || 'none',
+        kind: val('[data-calkind]') || 'meeting',
+        remind: Number(val('[data-calremind]') || 0) || 0,
+        note: val('[data-calnote]').trim(),
+        where: val('[data-calwhere]').trim(),
+        url: val('[data-callink]').trim(),
+      }
+      if (!e.title) return document.querySelector('#island-settings [data-caltitle]')?.focus()
+      calEdit = null
+      // This one event in this account: another account's copy of the same
+      // event is left alone.
+      return calSave([...(calEvents || []).filter(x => !calSameEvent(x, e)), e])
+    }
+    if (at('[data-calexport]')) {
+      return window.pet.calendar.export(calEvents || []).then(got => {
+        calIcs = got.ok ? got.path : got.error || ''
+        draw()
+      })
+    }
+    if (at('[data-calimport]')) {
+      const path = document.querySelector('#island-settings [data-calpath]')?.value.trim()
+      if (!path) return
+      return window.pet.calendar.import(path).then(got => {
+        if (!got.ok) {
+          calIcs = got.error || ''
+          return draw()
+        }
+        const have = new Set((calEvents || []).map(e => String(e.id)))
+        const add = (got.events || []).filter(e => !have.has(String(e.id)))
+        calIcs = path
+        return calSave([...(calEvents || []), ...add])
+      })
+    }
+    // The fields the open connection modal holds, for Testing or Saving.
+    const readConn = () => {
+      const q = sel => document.querySelector(`#island-settings ${sel}`)?.value || ''
+      const account = {
+        id: calAccount?.id || '',
+        provider: q('[data-calprovider]') || 'icloud',
+        url: q('[data-calf="url"]').trim(),
+        user: q('[data-calf="user"]').trim(),
+        clientId: q('[data-calf="clientId"]').trim(),
+        host: q('[data-calf="host"]').trim(),
+        calendar: q('[data-calf="calendar"]').trim(),
+        account: q('[data-calf="account"]').trim(),
+        refreshToken: q('[data-calf="refreshToken"]').trim(),
+        tokenUrl: q('[data-calf="tokenUrl"]').trim(),
+        proxy: q('[data-calf="proxy"]').trim(),
+      }
+      return { account, password: q('[data-calf="pass"]') }
+    }
+    if (at('[data-calaccnew]')) {
+      calAccount = { provider: 'icloud', url: '', user: '', clientId: '' }
+      return draw()
+    }
+    const accUse = at('[data-calaccuse]')
+    if (accUse) {
+      return window.pet.calendar.accountSelect(accUse.dataset.calaccuse).then(got => {
+        if (got.ok) calActiveId = accUse.dataset.calaccuse
+        return draw()
+      })
+    }
+    const accEdit = at('[data-calaccedit]')
+    if (accEdit) {
+      calAccount = (calAccounts || []).find(a => a.id === accEdit.dataset.calaccedit) || null
+      return draw()
+    }
+    const accDel = at('[data-calaccdel]')
+    if (accDel) {
+      return window.pet.calendar.accountRemove(accDel.dataset.calaccdel).then(got => {
+        calAccounts = (calAccounts || []).filter(a => a.id !== accDel.dataset.calaccdel)
+        calActiveId = got.active || ''
+        calAccount = null
+        return draw()
+      })
+    }
+    if (at('[data-caltest]')) {
+      const { account, password } = readConn()
+      calSyncMsg = T('cal.testing')
+      draw()
+      return window.pet.calendar.test(account, password).then(got => {
+        calSyncMsg = got.ok ? T('cal.tested', { n: String(got.calendars || 1) }) : got.error || ''
+        draw()
+      })
+    }
+    if (at('[data-calaccsave]')) {
+      const { account, password } = readConn()
+      return window.pet.calendar.accountSave(account, password).then(got => {
+        calSyncMsg = got.ok ? T('cal.accountSaved') : got.error || ''
+        if (got.ok) {
+          calAccount = { ...account, id: got.id }
+          calActiveId = got.id
+        }
+        return window.pet.calendar.account().then(a => {
+          calAccounts = Array.isArray(a?.accounts) ? a.accounts : calAccounts
+          calActiveId = a?.active || calActiveId
+          calAccount = calAccounts.find(x => x.id === calAccount?.id) || calAccount
+          draw()
+        })
+      })
+    }
+    if (at('[data-calsync]')) {
+      calSyncMsg = T('cal.syncing')
+      draw()
+      return window.pet.calendar.sync().then(got => {
+        if (!got.ok) {
+          calSyncMsg = got.error || ''
+          return draw()
+        }
+        // Merged by the account an event is in and its own id: the same
+        // event may be in two accounts, and merging by the id alone would
+        // let one account's copy hide the other's.
+        const have = new Map((calEvents || []).map(e => [calEventKey(e), e]))
+        for (const e of got.events || []) {
+          have.set(calEventKey(e), e)
+          // An event made before accounts had one has no account of its own:
+          // the copy that came back says which account it is in, and takes
+          // the old one's place rather than standing beside it.
+          for (const [k, old] of have) {
+            if (k !== calEventKey(e) && !old.account && String(old.id) === String(e.id)) have.delete(k)
+          }
+        }
+        for (const gone of got.removed || []) {
+          // Said with the account it was in: an account losing an event must
+          // not take another account's copy of it away.
+          const key = `${gone.account || calActiveId}\u0001${gone.id}`
+          have.delete(key)
+          for (const [k, old] of have) {
+            if (!old.account && String(old.id) === String(gone.id)) have.delete(k)
+          }
+        }
+        calSyncMsg = T('cal.synced', {
+          n: String((got.events || []).length),
+          pushed: String(got.pushed || 0),
+          updated: String(got.updated || 0),
+          deleted: String(got.deleted || 0),
+        })
+        return calSave([...have.values()])
+      })
+    }
     // An agent connected, repaired, removed (the welcome's buttons and the
     // Agent page's: data-agent="<id>:<install | remove>"); before a row's
     // own click, which opens it.
@@ -3294,6 +4359,11 @@
   }
 
   function redrawMail(focus) {
+    // Only when the Mail page is the one showing: a letter that came in
+    // while another page is open is not shown now, and redrawing the page
+    // that is (and measuring it again, and the window with it) is work for
+    // nothing that ends in a visible jump.
+    if (tab !== 'mail') return
     draw()
     relayout()
     if (focus) requestAnimationFrame(() => body.querySelector(focus)?.focus())
@@ -3553,7 +4623,11 @@
     askSlot,
     // The language may change from the menu while they are open.
     redraw: () => draw(),
+    // The width the panel is to be (0 for the narrow one): the island's
+    // window is made for it.
+    width: () => (calWidth || 0),
     close,
+
     // The letter to show once the Mail page opens ({ account, uid }).
     openLetter: target => (letterToOpen = target),
     // The plugin whose settings are folded out once the plugins page opens.

@@ -43,7 +43,7 @@ const SIDE_ROOM: f64 = 960.0 + 8.0 + 12.0;
 // side bar's top), along the strip.
 const TASKBAR_SEAT: f64 = 24.0;
 // The island's top edge in the window, and its compact height.
-const TOP: f64 = 8.0;
+const TOP: f64 = 12.0;
 const COMPACT_H: f64 = 36.0;
 // Her middle this close to her home: it reaches out for her; this close,
 // letting go puts her back in.
@@ -1452,7 +1452,7 @@ mod stow_tests {
 
     #[test]
     fn the_closed_island_on_the_screen() {
-        assert_eq!(closed_rect(&stowed()), Some((1092, 10, 375, 45)));
+        assert_eq!(closed_rect(&stowed()), Some((1092, 15, 375, 45)));
         let mut isl = stowed();
         isl.stow.closed = (0.0, 0.0);
         assert_eq!(closed_rect(&isl), None, "no size said yet");

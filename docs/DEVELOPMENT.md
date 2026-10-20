@@ -12,7 +12,7 @@ src/                      页面，Tauri 直接把整个文件夹打进 exe（ta
     hovers.js             页面进入过、光标已经不在其中的元素：bridge.js 替它们补发 mouseleave（见"点击穿透"第 4 条）
     pet.js                她的动画、空闲时走动和东张西望
     island.js             灵动岛：几种形状、她在岛里、把她拉出来和放回去
-    settings.js           长在岛里的设置（五个页签：通用、Agent、外观、插件、邮件）
+    settings.js           长在岛里的设置（七个页签：通用、Agent、外观、插件、MCP、日历、邮件）
     panel.js              确认面板：在岛里，或在设置的横幅里
     sprite.js             图集布局、16 个注视方向
     status.js             把一个会话说成话：名字、当前这一步、任务清单进度、结果（岛、设置、她的提示共用）
@@ -22,6 +22,7 @@ src/                      页面，Tauri 直接把整个文件夹打进 exe（ta
     mica.js               任务栏的云母：把桌面壁纸按 Windows 的摆法画到条带下面，模糊、调色；桌面小工具的玻璃也从它取（glassPaper）
     desk.html, desk.js, desk.css  桌面上的小工具（每块屏一个窗口）：画、拖动、贴网格、叠放、工作台、右键菜单
     deskgrid.js           桌面小工具的布局：72px 网格、放下时让开图标和别的小工具、每块屏记住位置、叠放的增减和翻页、工作台里的格子
+    calweek.js            日历周视图的算术：网格 44px 一小时、落点取整到 15 分钟、拖动/把手/方向键三种移动事件的方式（无页面，test/calendar.test.js 直接要它）
     wdesk.js              桌面小工具按大小画（小 156×156、中 324×156、大 324×324），设计第 4 节每种每档放什么
     presses.js            程序按钮上的按法：中键、Shift、Ctrl、Shift+右键各做什么，Ctrl+单击轮到哪个窗口（主屏和副屏的任务栏共用）
     aim.js                从程序按钮往上去它的窗口列表：列表开着时在别的按钮上待多久才换成它的（按 Windows 自己的任务栏实测）、往列表去的路上划过的按钮不算（安全三角形）（主屏和副屏的任务栏共用）
@@ -52,7 +53,7 @@ src-tauri/
     pointer.rs            两个窗口共用的点击穿透
     screen.rs             各个显示器的工作区
     asks.rs               确认请求：显示什么、每个选择回给 Claude Code 什么、排队和超时
-    connection.rs         插件、settings.json 里的 hooks、Codex 的 hooks.json、Antigravity 的 hooks.json、OpenCode 的插件文件、omp 的扩展、ZCode 的 config.json、DeepSeek Harness 的补丁文件（安装 / 移除 / 状态）、各 agent 文件里写着的版本、开机自启
+    connection.rs         插件、settings.json 里的 hooks、Codex 的 hooks.json、Antigravity 的 hooks.json、OpenCode 的插件文件、omp 的扩展、ZCode 的 config.json、Trae CN 的 hooks.json、WorkBuddy 的 settings.json、DeepSeek Harness 的补丁文件（安装 / 移除 / 状态）、各 agent 文件里写着的版本、开机自启
     logon.rs              开机自启的计划任务（任务栏和岛都有，Task Scheduler 的 COM）、这次登录是什么时候
     lhm.rs, lhm_setup.rs  监控的 LibreHardwareMonitor 来源：读它的网页服务器；用户点了时下载，以管理员身份装进 Program Files、配置、启动它，它自己的开机任务
     fetch.rs              codex-pets.net：解析地址、下载宠物、图库
@@ -64,17 +65,21 @@ src-tauri/
     jump.rs               点会话就到它的窗口：会话的进程链、找窗口、叫到前面、桌面版的会话链接
     widgets.rs            岛上的插件（第一层）：脚本发来的、内置的（今天、今天的 token、监控），什么时候冒头
     tokens.rs             今天的 token：读 Claude Code、Codex 和 Antigravity 自己的会话记录
+    music.rs              正在放的音乐：Windows 的媒体会话（播放器、歌名、歌手、进度，浏览器里的也算），歌词来自 LRCLIB
     scripts.rs            她替你在后台跑的插件：示例脚本的开关、参数、启动、重启、停下
     mail.rs, mail/        邮件：找服务器（像 Thunderbird 那样）、IMAP（io-imap）、每个邮箱一个线程盯着收件箱、收件箱和读信、写信和发信（SMTP）、走代理、交给 Claude / Codex / Antigravity、密码存进凭据管理器
     notify.rs             系统通知（登记 AppUserModelId 后发 toast）
     tray.rs               托盘图标（随心情变脸）和菜单；任务栏上音量、网络、时钟的右键菜单（照 Windows 的）
     server.rs             127.0.0.1:47213 上的 HTTP 接口
+    mcp.rs                她自己的 MCP 服务（wakuwaku.exe --mcp，stdio）：12 个工具，转给正在跑的实例
     state.rs              状态机：按会话记 mood、名字、在跑的工具、任务清单、改过的文件、结果，挑最需要你的那个显示
     events.rs             Claude Code 的 hook 事件 → 消息；会话名（session_title 或会话记录）、项目名（git 仓库名）
     events_codex.rs       Codex 的 hook 事件 → 消息（步骤、任务、回复、项目名的说法用 events.rs 的）
     events_opencode.rs    OpenCode 插件发来的事件 → 和 Claude Code 一样名字的 hook 事件（确认、找窗口用）→ 消息
     events_omp.rs         omp（oh-my-pi）扩展发来的事件 → 消息：小写的工具名、`path` 参数换成 Claude Code 的，再交给 events.rs
     events_zcode.rs       ZCode 的 hook 事件 → 消息：就是 Claude Code 的格式，用 events.rs 的，加上 agent: "zcode"
+    events_trae.rs        Trae CN 的 hook 事件 → 消息：Claude Code 的字段，加上 agent: "trae"
+    events_workbuddy.rs   WorkBuddy 的 hook 事件 → 消息：Claude Code 的字段，加上 agent: "workbuddy"
     events_dsh.rs         DeepSeek Harness 的 hook 事件（它的 Claude Code 兼容桥发的）→ 消息：工具名换成 Claude Code 的再交给 events.rs，会话名读它的投影缓存，最后说的话读它的会话记录（Zstandard，ruzstd）
     data.rs               数据目录、设置读写、已下载的宠物和 Codex 的宠物
     detach.rs             她启动的进程：更新、重启、守护进程按普通方式启动；hook 拉起她、启动时自查要脱离启动者的作业，作业不放行时才以资源管理器为父进程
@@ -107,6 +112,8 @@ cd .. && node --test "test/*.test.js"   # 页面的单元测试
 ```
 
 页面是打进 exe 的：改了 `src/` 要重新编译（cargo 会发现）。不需要 Node 和 Tauri CLI；`Cargo.toml` 默认开着 `custom-protocol`，所以 `cargo run` 也直接用打进去的页面，不找开发服务器。
+
+**改了 `src/` 里的页面要重新编译，而且要真的编进去**（`src-tauri/build.rs` 逐个文件 `rerun-if-changed` 整个 `../src`）：页面是 `tauri::generate_context!` 宏在编译 app crate 时塞进 exe 的，cargo 在 Rust 源码没变时会跳过宏，页面就留着旧的——而 `tauri_build::build()` 只监听 `tauri.conf.json` 和 `capabilities/`，不监听页面。少了这一句，「改了页面没反应」是真的没反应。
 
 **数据放在哪**（`data.rs` 的 `folder()`）：`WAKUWAKU_USER_DATA`（测试用）；从源码树里运行时是项目的 `data/`；否则是 exe 旁边的 `wakuwaku-data/`，启动时没有就新建一个。旧的 Electron 安装版的 `%APPDATA%\wakuwaku` 不再读取。数据目录里放一个 `debug.on` 文件，就会写 `debug.log`（两个页面的 console.log 也在里面）。
 
@@ -358,7 +365,7 @@ omp 的计划审批也走这里（`tool_name: "ExitPlanMode"`，面板上标着 
 
 ## 她替你跑的插件（scripts.rs）
 
-examples/widgets 里的天气、股票、番茄钟、倒计时、久坐提醒、CI、开发服务器，打开开关她就在后台替你跑，不用开终端。邮件的几个暂时不在里面。
+examples/widgets 里的天气、股票、番茄钟、倒计时、久坐提醒、CI，打开开关她就在后台替你跑，不用开终端。邮件的几个暂时不在里面。
 
 - **设置**：`plugins: { <id>: { on, <参数>: 值 } }`，参数名就是脚本的参数名（`City`、`Repo`……），`scripts::is_ok` 只收认识的插件和参数：文字不带控制字符，数字是正数，开关是 true / false，几个里选一个的（`Kind::Choice`，比如股票的涨跌颜色）只收它的选项；每个选项是脚本的一个开关（`-RedUp`），没选过时按她的语言取（`choice`：中文的、其他语言的），语言一换参数就变了，插件按新参数重启。页面上点「设置」展开参数；打开一个缺必填参数的插件时自动展开，那一行说「先填……」。正在输入的不会被每 3 秒的刷新冲掉（`settings.js` 的 `drafts`），回车或离开输入框才保存。
 - **脚本从哪来**：编进 exe（`include_bytes!`），启动后写到 `<数据目录>/plugins/<id>.ps1`（内容不同才写），所以哪份宠物跑的都是自己那一版。
@@ -448,6 +455,40 @@ mail/proxy.rs      代理：跟随系统 / 手动（HTTP CONNECT、SOCKS5，自�
   - **要应用专用密码的**：账户表单找到服务器后，按 IMAP 主机说一句：Gmail（先开两步验证再生成 16 位应用专用密码，「去生成」打开 myaccount.google.com/apppasswords）、iCloud、Yahoo（也有链接）、QQ、163/126（授权码，说在网页版哪里开）。链接只能是 `settings_open_site` 里写死的几个。Gmail 的应用专用密码照它显示的四个一组粘贴进来时，空格去掉。
 - **存哪**：账户在设置的 `mail` 里（`[{ id, address, name, host, port, security, auth, username, smtp: { host, port, security, auth, username } | null, on }]`，只能通过 `mail_save` / `mail_remove` / `mail_switch` 改，设置补丁里的 `mail` 不收）；密码在 Windows 凭据管理器，名字是 `Wakuwaku mail <id>`（`CredWriteW`），删除邮箱时一起删。交给 agent 的信在 `<数据目录>/mail/`，不会自动删。
 - **测试**：单元测试读 ISPDB 配置、MX 域名、GBK 主题、一封信的正文和附件、文件夹名和提示里没有终端会当真的字符、`letter.md`、凭据管理器写读删。单元测试还有：autoconfig 里的 SMTP、TU Dresden 的发件服务器、SMTP 的整个来回（`smtp.rs` 里一个按脚本回话的本地服务器：AUTH PLAIN / LOGIN、两个收件人、`.` 开头的行，被拒的收件人，密码不对）、一封信写出来的样子（中文名字和主题、In-Reply-To / References、附件、Bcc 只在存的那份里）、`people_in`、附件名和类型；代理（`cargo test proxy`）：Clash、v2rayN 写的系统代理和 `ProxyOverride`、手填的地址，测试里的小 HTTP 代理和 SOCKS5 代理（按名字连、只放 443、连不上服务器、类型弄反、代理不在），SMTP 的问候先于 200 到达，IMAP 的 IDLE 走代理时按时续上、代理断开时马上失败，找服务器的 HTTPS 请求走代理。整体用 `test/fake-imap.js`（不加密，`node test/fake-imap.js --port 14310 --want-id --dir <文件夹>`，密码 `test`）：收件箱是文件夹里的 `.eml`（`test/fixtures/mail/` 有四封：已读的、加了星的 GBK 主题加抄送、只有 HTML、带附件的回信；名字里有 `-seen` 是已读，有 `-flagged` 是星标），支持 `SEARCH FLAGGED` 和 `STORE`，运行时放进一个新文件就推 `EXISTS`；`--want-id` 像网易不报 ID 不让开文件夹，`--login-only` 只有 `LOGIN`，`--no-idle` 让宠物轮询，`--log` 打出每条命令；支持 `APPEND`（`--sent <文件夹>` 把存进去的信写成文件，`--unmarked-sent` 让 Sent 没有 `\Sent`，试按名字找），改标记时打一行。文件夹里删掉一个文件就是服务器删了那封信（在 IDLE 的连接收到 `EXPUNGE`）；一条连接改了标记，在同一文件夹 IDLE 的其他连接收到 `FETCH (FLAGS …)`（试「别处改了」）；`--sent-from test/fixtures/mail-sent` 让「已发送」里先有两封（回复合同的那封的上一封、回复王总方案的一封），试会话；`--many 2000` 再造 2000 封（每第五封回复前一封），试大邮箱。发信用 `test/fake-smtp.js`（不加密，`--port 14325 --dir <文件夹>`，密码 `test`）：收到的每封信存成 `<n>.eml`，旁边 `<n>.json` 是信封（谁发、发给谁，含密送）；`--auth none` 不要登录，`--reject a@b` 拒收这些地址。测试宠物上用 `/debug/eval` 调 `window.pet.mail.save({ address, host: '127.0.0.1', port, security: 'plain', username }, 'test')` 加账户（发件服务器：`smtp: { host: '127.0.0.1', port: 14325, security: 'plain', username }`），`window.pet.mail.send({ account, to, cc, bcc, subject, text, reply, forward, files })` 发信。代理用 `test/fake-proxy.js`（`node test/fake-proxy.js --port 17890 --map imap.example.test=127.0.0.1:14310,smtp.example.test=127.0.0.1:14325 --log`）：一个端口同时说 HTTP CONNECT 和 SOCKS5，像 Clash 的混合端口；`--map` 把一个没人解析得了的名字送到本机的假服务器，所以账户填 `imap.example.test` 时只有走代理（并且让代理解析名字）才连得上；`--http-only` / `--socks-only` 像只会一种的代理，`--only-443` 像 Squid；Ctrl+C 再启动就是代理重启。邮件页选「手动」填 `127.0.0.1:17890`，或者在账户的高级设置里单独设；不碰 Windows 的代理设置。
+
+## 日历（settings.rs 的后半）
+
+- **存哪**：日程在 `<数据目录>/calendar.json`，一条是 `{ id, date: "YYYY-MM-DD", start: "HH:MM", end, title, note, where, url, repeat: none|daily|weekly|monthly, remind: 0|5|…|10080 }`（`where` 是地点，`url` 是链接，`remind` 是提前的分钟数，0 不提醒）。重复由页面按天展开显示。
+- **ICS**：导入导出都走这几个字段。地点和链接写进 `LOCATION` / `URL`，读回来也进 `where` / `url`。读 `VALARM` 的 `TRIGGER:-PTnM`（也认 `-PT1H30M`、`P1D`）成 `remind`，写回时生成 `ACTION:DISPLAY` 的闹钟。编辑远端事件时 `ics_patch` 只换我们拥有的字段（`UID / SUMMARY / DTSTART / DTEND / DESCRIPTION / LOCATION / URL / RRULE`，闹钟按新的 `remind` 重建），别的属性（参与人、颜色……）原样留着。
+- **账户**：`<数据目录>/calendar-accounts.json` 是 `{ accounts: [{ id, provider, url, user, on, clientId?, host?, calendar?, account?, tokenUrl?, proxy? }], active }`；旧的单个 `calendar-account.json` 在第一次读到时并进来，密码改存成 `wakuwaku-calendar-<id>`。密码在 Windows 凭据管理器 `wakuwaku-calendar`；Google 的 client secret 和 refresh token 在 `wakuwaku-calendar-google-<id>`（JSON，两个都只进凭据管理器，不进这个文件——早期版本把 refreshToken 写进了文件，现在保存时一次搬到凭据管理器里）。
+- **地址和登录名**（`cal_account_url` / `cal_login`）：连接表单各家填法不同，地址和登录名都只在这里算一次，「测试连接」和同步拨的是同一个地方。Nextcloud 填服务器地址 + 用户名 + 日历名（拼成 `<host>/remote.php/dav/calendars/<user>/<calendar>`，日历名留空就是日历文件夹，由同步在里面找日历），它的「账号」字段是登录名，可以和路径上的用户名不同。Google 填的是日历 ID（当地址用，`#` 和空格转义）或直接一个真的地址。自建和 iCloud 就是地址本身。
+- **同步**（`calendar_sync`）：
+  1. 先 `PROPFIND` 账号地址（Depth 1）：回答里有子日历就用子日历（iCloud 根、Nextcloud `/remote.php/dav/calendars/<用户>/`），否则地址本身就是一个日历。`REPORT` 并行跑。
+  2. 新事件 `PUT <日历>/<id>.ics` + `If-None-Match: *`，UID 用事件自己的 id，下次拉回来还是同一条。
+  3. 本地改了：先 `GET` 原始 ICS，`ics_patch` 只替换我们拥有的字段，再 `PUT` + `If-Match: <ETag>`；ETag 对不上就算失败，不覆盖。
+  4. 本地删了：按 `<数据目录>/calendar-sync.json` 上次记的 `href` `DELETE`；只删当前账户日历范围内的。
+  5. 远端删了、本地没改（字段快照和上次一样）：返回 `removed`，页面把它从本地去掉；本地改过就重新 `PUT`。
+  - 同步记录按账户分开（`{ "accounts": { "<账户 id>": [ { id, href, etag, sig } ] } }`）：切到另一个账户时，属于别的账户的事件不推（`foreign`），避免把 A 的日程灌进 B；每个账户自己的 ETag 也留着，切回来不用重建。键是**账户的 id**，不是地址：两个账户可能指向同一个服务器（同一个日历看了两遍、另一个登录），按地址分就会共用一份记录、互相把对方的事件当成自己的。旧版本按地址存的记录，认得出来时会搬到对应账户下。
+  - **一条事件的身份是「账户 + 它的 id」**（`cal_event_key` / `calEventKey`）：同一条日程可以在两个账户里都有（复制过去的），只按 id 合并会让一个账户的副本盖掉另一个，一个账户丢了事件还会把另一个的也带走。页面的编辑、删除、拖动也都带着账户。
+  - **事件的颜色按它所在的日历**：拉日历时一起问 `calendar-color`（CalDAV 的和 Apple 的两种拼法都问，谁答就用谁），日历的名字也存下来，页面用它上色并写在小条边上；没有颜色的日历和本地加的日程按日历名（或账户）取一个固定的颜色，同一个来源每次都是同一个。
+  - 协议都走 PowerShell 的 `Invoke-WebRequest`（`caldav_call` / `caldav_send` / `caldav_get` / `caldav_delete`），因为 ureq 没有自定义方法；`caldav_items` 按 `<response>` 拆 href / getetag / calendar-data —— **标签带不带前缀都认**（`<response>` 和 `<d:response>`，服务器的 DAV: 命名空间是不是默认的不定，以前只认前一种，带前缀的服务器一个日历都读不出来）。
+  - 代理：账户自己填的地址（`cal_proxy`）两种都支持，HTTP 和 SOCKS5 都走 PowerShell 的 `-Proxy`（PowerShell 7 的 .NET 6 会说 SOCKS5）和 ureq 的 `mail::proxy::agent`（Google 换 token）。填错不忽略，报「代理地址看不懂」。
+- **Google**：`provider=google`。`calendar_google_auth` 在 `127.0.0.1:<随机端口>` 起一个 tiny_http 收授权码（`rundll32` 打开浏览器），换 refresh token；同步前用 refresh token 换 access token，`Authorization` 用 `Bearer`。URL 没填时用 `https://apidata.googleusercontent.com/caldav/v2/<用户名>/events/`，填了日历 ID 就用它。需要自己的 OAuth 客户端（桌面应用，启用 Calendar API）。
+- **提醒**：`start_reminders` 线程每 20 秒看一遍 `calendar.json`；`remind > 0`、按重复规则今天有这一天、现在落在 `[开始 - remind, 开始)` 里，就 `put_widget` 一个 `calendar` 图标的 widget（带 `nudge`）。说过的 key `"<id>@<YYYY-MM-DD>"` 记在 `<数据目录>/calendar-notified.json`，重启也不会重复；全天日程（没有 `start`）不提醒。本地时间用 `widgets::local_date` / `local_midnight`，重复展开用 `days_from_civil` 算天数差。
+- **岛上的日程小工具**：内置 `calendar`（`widgets.rs` 的 `BUILT_IN`），`calendar_words` 给出今天正在进行或最近的下一个日程（`"15:00 评审"` / `"评审 · 进行中"`，24 字以内）；小工具在主循环里每 30 秒算一次，没有日程时就不出现。
+- **测试**：`ics_events` / `ics_for` 的闹钟往返、`ics_patch` 保留别人的属性、`trigger_minutes`、`occurs_on`、OAuth 的表单编码；页面在预览里用假的 `window.pet.calendar`（`tools/preview/fake-tauri.js`）。
+
+## Wakuwaku MCP（mcp.rs）
+
+- `wakuwaku.exe --mcp`：stdio、一行一个 JSON-RPC（MCP 2025-06-18），只有 tools。工具通过本机 HTTP 问正在跑的实例（`/sessions`、`/mail`、`/mail/letter`、`/mail/send`、`/devservers`、`/devservers/start`、`/calendar`、`/calendar/add`、`/calendar/update`、`/calendar/delete`、`/widget`、`/health`）；她没开时每个工具都说没在运行。
+- 12 个工具：`wakuwaku_sessions`、`wakuwaku_notify`、`wakuwaku_mail`、`wakuwaku_mail_read`、`wakuwaku_mail_send`、`wakuwaku_devservers`、`wakuwaku_devserver_start`、`wakuwaku_calendar`、`wakuwaku_calendar_add`、`wakuwaku_calendar_update`、`wakuwaku_calendar_delete`、`wakuwaku_health`。参数和返回在 `mcp.rs` 的 `tools()`。
+- `wakuwaku_calendar` 按天给日程（默认今天，重复按当天展开）；`wakuwaku_calendar_add` 校验标题、日期、时间、重复和提醒后追加进 `calendar.json`，id 是毫秒时间戳；`wakuwaku_calendar_update` 按 id 只改给的字段（`apply_update` 合并后仍走同一套校验）；`wakuwaku_calendar_delete` 按 id 删。`GET /calendar?date=YYYY-MM-DD`、`POST /calendar/add|update|delete` 是它们的 HTTP 面，其他程序也能直接调。改动会在下一次同步时 PUT/DELETE 到 CalDAV。
+- 设置「MCP」页给出的命令是 `"<exe>" --mcp`；Claude Code 用 `claude mcp add wakuwaku -- "<exe>" --mcp`，Trae / WorkBuddy 用同一份 JSON。
+
+## 音乐（music.rs）
+
+- 读 Windows 的媒体会话（GSMTC）：当前播放器、标题、歌手、播放状态；内置 `music` 小工具在岛上轮流出现，展开的卡片里是 LRCLIB 的歌词。
+- 调试：`wakuwaku.exe --wakuwaku-music` 直接打一份当前会话的 JSON，不启动窗口。
 
 ## 点击穿透
 

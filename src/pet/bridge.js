@@ -249,6 +249,10 @@
       // omp's extension, in each of its agent folders: 'install', 'remove'.
       ompHooks: action => invoke('settings_omp_hooks', { action }),
       zcodeHooks: action => invoke('settings_zcode_hooks', { action }),
+      // Trae CN's hooks.json, Claude Code's shape: state only.
+      traeHooks: action => invoke('settings_trae_hooks', { action }),
+      // WorkBuddy's settings.json, Claude Code's hooks: state and notification.
+      workbuddyHooks: action => invoke('settings_workbuddy_hooks', { action }),
       dshHooks: action => invoke('settings_dsh_hooks', { action }),
       // The CPU temperature/power helper (#18 part B): 'install',
       // 'installPawnIO' (download PawnIO first), 'remove'. Each shows one UAC.
@@ -263,6 +267,26 @@
       lhm: what => invoke('settings_lhm', { what: String(what) }),
       // Her crash reports: 'yes', 'no' (her asking answered), 'send', 'open' (the last one's issue; crash.rs).
       crash: what => invoke('settings_crash', { what }),
+    },
+    // The calendar's events (data/calendar.json).
+    calendar: {
+      get: () => invoke('calendar_get'),
+      set: events => invoke('calendar_set', { events }),
+      // An ICS file out (beside her data) and in (the path given).
+      export: events => invoke('calendar_export', { events }),
+      import: path => invoke('calendar_import', { path: String(path) }),
+      importText: text => invoke('calendar_import_text', { text: String(text || '') }),
+      // The CalDAV account (its password in Credential Manager) and a pull.
+      account: () => invoke('calendar_account'),
+      accountSave: (account, password) => invoke('calendar_account_save', { account, password: String(password || '') }),
+      accountSelect: id => invoke('calendar_account_select', { id: String(id || '') }),
+      accountRemove: id => invoke('calendar_account_remove', { id: String(id || '') }),
+      test: (account, password) => invoke('calendar_test', { account, password: String(password || '') }),
+      sync: () => invoke('calendar_sync'),
+      // Google: one trip to the browser, the refresh token kept in Credential Manager.
+      googleAuth: (id, clientId, clientSecret) => invoke('calendar_google_auth', { id: String(id || ''), clientId: String(clientId || ''), clientSecret: String(clientSecret || '') }),
+      // A link on an event: the system browser, http(s) only.
+      openExternal: url => invoke('settings_open_external', { url: String(url || '') }),
     },
     // Mail accounts (mail.rs): the server for an address, an account kept
     // once it signs in, one removed, one on or off, a server tried without

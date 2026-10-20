@@ -57,6 +57,8 @@ mod events_opencode;
 mod events_omp;
 mod events_dsh;
 mod events_zcode;
+mod events_trae;
+mod events_workbuddy;
 mod fetch;
 mod focus;
 mod fullscreen;
@@ -71,6 +73,8 @@ mod lhm;
 mod lhm_setup;
 mod logon;
 mod mail;
+mod mcp;
+mod music;
 mod notch;
 mod notify;
 mod paper;
@@ -156,6 +160,10 @@ pub struct Shared {
     pub omp_seen: std::sync::atomic::AtomicU64,
     // And ZCode's.
     pub zcode_seen: std::sync::atomic::AtomicU64,
+    // And Trae CN's.
+    pub trae_seen: std::sync::atomic::AtomicU64,
+    // And WorkBuddy's.
+    pub workbuddy_seen: std::sync::atomic::AtomicU64,
     // And DeepSeek Harness's.
     pub dsh_seen: std::sync::atomic::AtomicU64,
     // When the last Claude Code event came (ms), 0 never: the settings tell
@@ -1352,6 +1360,42 @@ fn zcode_hook(port: u16, name: &str) {
     }
 }
 
+// WorkBuddy's hook (connection::WORKBUDDY_FLAG): Claude Code's fields, state
+// only, so {} is printed and the event handed on. Where the session runs is
+// added as it starts or a turn begins.
+fn workbuddy_hook(port: u16) {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"{}\n");
+    let _ = out.flush();
+    let Some(mut event) = read_event() else { return };
+    let name = event["hook_event_name"].as_str().unwrap_or("").to_string();
+    if let Some(fields) = event.as_object_mut() {
+        if matches!(name.as_str(), "SessionStart" | "UserPromptSubmit") {
+            fields.insert(jump::CODEX_CHAIN.into(), jump::chain_json(&jump::hook_chain()));
+        }
+    }
+    post_and_go(port, "workbuddy", &event);
+}
+
+// Trae CN's hook (connection::TRAE_FLAG): its events carry Claude Code's
+// fields; state only, so {} is printed at once (Trae waits on it) and the
+// event handed on. Where the session runs is added as it starts or a turn
+// begins. It never starts her: Trae's hooks run in its own sandbox, and its
+// Settings → Hooks turns them on by hand anyway.
+fn trae_hook(port: u16) {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"{}\n");
+    let _ = out.flush();
+    let Some(mut event) = read_event() else { return };
+    let name = event["hook_event_name"].as_str().unwrap_or("").to_string();
+    if let Some(fields) = event.as_object_mut() {
+        if matches!(name.as_str(), "SessionStart" | "UserPromptSubmit") {
+            fields.insert(jump::CODEX_CHAIN.into(), jump::chain_json(&jump::hook_chain()));
+        }
+    }
+    post_and_go(port, "trae", &event);
+}
+
 // DeepSeek Harness's hook (connection::DSH_FLAG and the event's name), run
 // by its Claude Code bridge through its PowerShell, in its sandbox: the event
 // handed to her port and let go. As a session starts or a turn begins it
@@ -1402,6 +1446,12 @@ fn main() {
         }
         return;
     }
+    // What is playing now as JSON, its lyric line too, then gone: to try the
+    // media sessions and LRCLIB without starting her.
+    if args.iter().any(|a| a == "--wakuwaku-music") {
+        println!("{}", serde_json::to_string_pretty(&music::dump()).unwrap_or_default());
+        return;
+    }
     // The sensor helper and its elevated setup/removal (sensors.rs, #18 part
     // B): each ends without starting a pet. The helper takes her port and
     // data folder; the setup takes the port, the user's SID and the data
@@ -1434,6 +1484,13 @@ fn main() {
     if let Some(at) = args.iter().position(|a| a == connection::ENSURE_FLAG || a == connection::LEGACY_ENSURE_FLAG) {
         return ensure_running(port, &args[at + 1..]);
     }
+    // An agent's MCP server (its own config names this exe and --mcp): stdio.
+    if args.iter().any(|a| a == "--mcp") {
+        if let Err(e) = mcp::serve(port) {
+            eprintln!("mcp: {e}");
+        }
+        return;
+    }
     if std::env::args().any(|a| a == connection::CODEX_FLAG) {
         return codex_hook(port);
     }
@@ -1442,6 +1499,12 @@ fn main() {
     }
     if let Some(at) = args.iter().position(|a| a == connection::ZCODE_FLAG) {
         return zcode_hook(port, args.get(at + 1).map_or("", String::as_str));
+    }
+    if args.iter().any(|a| a == connection::TRAE_FLAG) {
+        return trae_hook(port);
+    }
+    if args.iter().any(|a| a == connection::WORKBUDDY_FLAG) {
+        return workbuddy_hook(port);
     }
     if let Some(at) = args.iter().position(|a| a == connection::DSH_FLAG) {
         return dsh_hook(port, args.get(at + 1).map_or("", String::as_str));
@@ -1562,6 +1625,8 @@ fn main() {
             settings::settings_opencode,
             settings::settings_omp_hooks,
             settings::settings_zcode_hooks,
+            settings::settings_trae_hooks,
+            settings::settings_workbuddy_hooks,
             settings::settings_dsh_hooks,
             settings::settings_cpu_sensors,
             bars::bar_ready,
@@ -1591,6 +1656,22 @@ fn main() {
             settings::settings_update,
             settings::settings_lhm,
             settings::settings_crash,
+            settings::settings_devservers,
+            settings::calendar_get,
+            settings::calendar_set,
+            settings::calendar_export,
+            settings::calendar_import,
+            settings::calendar_import_text,
+            settings::calendar_account,
+            settings::calendar_account_save,
+            settings::calendar_account_select,
+            settings::calendar_account_remove,
+            settings::calendar_test,
+            settings::calendar_sync,
+            settings::calendar_google_auth,
+            settings::settings_open_external,
+            settings::settings_devserver_start,
+            settings::settings_devserver_stop,
             mail::mail_discover,
             mail::mail_probe,
             mail::mail_save,
@@ -1672,6 +1753,8 @@ fn main() {
                 opencode_seen: std::sync::atomic::AtomicU64::new(0),
                 omp_seen: std::sync::atomic::AtomicU64::new(0),
                 zcode_seen: std::sync::atomic::AtomicU64::new(0),
+                trae_seen: std::sync::atomic::AtomicU64::new(0),
+                workbuddy_seen: std::sync::atomic::AtomicU64::new(0),
                 dsh_seen: std::sync::atomic::AtomicU64::new(0),
                 claude_seen: std::sync::atomic::AtomicU64::new(0),
                 own: Mutex::new(Vec::new()),
@@ -1714,6 +1797,9 @@ fn main() {
             server::serve(sh.clone(), listener);
             // The mail accounts that are on, watched from the start.
             mail::sync(&sh);
+            // The calendar's reminders: a line on the island when an event
+            // comes within the notice set on it (settings.rs).
+            settings::start_reminders(sh.clone());
             // The desktop's widgets (desk.rs).
             desk::sync(&sh);
             // Her updates looked for (a downloaded exe only).
@@ -1756,6 +1842,7 @@ fn main() {
                 let mut tokens = tokens::Tokens::default();
                 let (claude_dir, codex_dir, agy_dirs) = (tokens::claude_dir(), tokens::codex_dir(), tokens::agy_dirs());
                 let mut tokens_at: Option<std::time::Instant> = None;
+                let mut calendar_at: Option<std::time::Instant> = None;
                 loop {
                     let now = now_ms();
                     let mut changed = watcher.widgets.lock().unwrap().expire(now);
@@ -1776,6 +1863,15 @@ fn main() {
                             tokens::words(tokens.count())
                         });
                         built_in("tokens", count);
+                    }
+                    // The calendar: the event today that is on now or next.
+                    if calendar_at.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(30)) || unread("calendar") {
+                        calendar_at = Some(std::time::Instant::now());
+                        let words = watcher
+                            .is_widget_wanted("calendar")
+                            .then(|| settings::calendar_words(&watcher))
+                            .flatten();
+                        built_in("calendar", words);
                     }
                     // A new day: today's counts start again.
                     if watcher.today.lock().unwrap().date != widgets::local_date() {
@@ -1862,6 +1958,32 @@ fn main() {
                     let guard = woken.lock().unwrap();
                     let (mut guard, _) = cv.wait_timeout_while(guard, wait, |w| !*w).unwrap();
                     *guard = false;
+                }
+            });
+
+            // What is playing (music.rs): its words and its lyric lines every
+            // few seconds while its widget is on; gone when nothing plays.
+            let tunes = sh.clone();
+            spawn_named("music", move || {
+                power::thread_eco();
+                let mut music = music::Music::default();
+                loop {
+                    let on = tunes.is_widget_wanted("music");
+                    let said = on.then(|| music.turn()).flatten();
+                    let changed = {
+                        let mut widgets = tunes.widgets.lock().unwrap();
+                        match said {
+                            Some((words, detail)) => widgets.set_built_in_with("music", words, detail, now_ms()),
+                            None => widgets.remove_built_in("music"),
+                        }
+                    };
+                    if !on {
+                        music.reset();
+                    }
+                    if changed {
+                        tunes.redraw_widgets();
+                    }
+                    std::thread::sleep(Duration::from_secs(if tunes.is_quiet() { 15 } else { 3 }));
                 }
             });
 

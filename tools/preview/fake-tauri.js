@@ -50,6 +50,49 @@
   const label = LABELS[role] || role
   const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)))
 
+  // An ICS text as events, the fields settings.rs's ics_events reads and the
+  // import panel shows: SUMMARY, DTSTART, DTEND, RRULE, VALARM's TRIGGER.
+  // Only for the preview, which parses nothing else in the real thing.
+  const fakeIcs = text => {
+    const unescape = s => String(s).replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\')
+    const stamp = v => {
+      const d = String(v).match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2}))?/)
+      if (!d) return null
+      return { date: `${d[1]}-${d[2]}-${d[3]}`, start: d[4] ? `${d[4]}:${d[5]}` : '' }
+    }
+    const out = []
+    let ev = null
+    for (const line of String(text).split(/\r?\n/)) {
+      if (line.startsWith('BEGIN:VEVENT')) {
+        ev = { repeat: 'none', remind: 0 }
+        continue
+      }
+      if (line.startsWith('END:VEVENT')) {
+        if (ev && ev.date) out.push(ev)
+        ev = null
+        continue
+      }
+      if (!ev) continue
+      const at = line.indexOf(':')
+      if (at < 0) continue
+      const name = line.slice(0, at).split(';')[0].toUpperCase()
+      const value = line.slice(at + 1)
+      if (name === 'SUMMARY') ev.title = unescape(value)
+      else if (name === 'DESCRIPTION') ev.note = unescape(value)
+      else if (name === 'LOCATION') ev.where = unescape(value)
+      else if (name === 'URL') ev.url = value.trim()
+      else if (name === 'DTSTART') Object.assign(ev, stamp(value) || {})
+      else if (name === 'DTEND') ev.end = (stamp(value) || {}).start || ''
+      else if (name === 'RRULE') ev.repeat = /FREQ=DAILY/i.test(value) ? 'daily' : /FREQ=WEEKLY/i.test(value) ? 'weekly' : /FREQ=MONTHLY/i.test(value) ? 'monthly' : 'none'
+      else if (name === 'TRIGGER' && value.startsWith('-P')) {
+        // -PT15M, -PT1H30M, -P1D: the minutes before the start, as ics_trigger reads it.
+        const m = value.match(/^-P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/i)
+        if (m) ev.remind = (Number(m[1] || 0) * 1440) + (Number(m[2] || 0) * 60) + Number(m[3] || 0)
+      }
+    }
+    return out
+  }
+
   // --- The clock ------------------------------------------------------------------------
   const realClock = HOST_PAGE || !!host || Q.get('clock') === 'real'
   // Alone: 14:42 on 17 October 2026, in this computer's time zone.
@@ -209,6 +252,16 @@
     sprite: ROOT + 'pets/claude-chan/spritesheet.webp',
     // The sessions as state.rs views them; the first is the one shown.
     sessions: [],
+    // The calendar (data/calendar.json) around the preview's Saturday, with a
+    // repeat and reminders so the page has something to show and change.
+    calendar: [
+      { id: 'pv-1', date: '2026-10-17', start: '10:00', end: '11:00', title: '周会', note: '过一遍这周的进度', repeat: 'weekly', remind: 10 },
+      { id: 'pv-2', date: '2026-10-17', start: '15:00', end: '16:00', title: '设计评审', note: '', repeat: 'none', remind: 0 },
+      { id: 'pv-3', date: '2026-10-19', start: '09:30', end: '10:00', title: '和 Claude 对需求', note: '', repeat: 'none', remind: 5 },
+      { id: 'pv-4', date: '2026-10-21', start: '', end: '', title: '小长假', note: '', repeat: 'none', remind: 0 },
+    ],
+    // The accounts the page shows (their passwords are never kept in the config).
+    calendarAccounts: [{ id: 'acc-preview', provider: 'icloud', url: 'https://caldav.icloud.com/20182453318/calendars/', user: 'you@example.com' }],
     // The prompts waiting (asks.rs views).
     asks: [],
     // Every widget with something to say (widgets.rs), and the plugins she runs (scripts.rs).
@@ -335,6 +388,9 @@
     const on = world.connected
     return {
       settings: config(),
+      // Her own exe, for the MCP page's command: the installed one, as the
+      // release would have it.
+      exe: 'C:\\Program Files\\Wakuwaku\\wakuwaku.exe',
       lang: world.lang,
       pets: [{ id: 'claude-chan', name: 'Claude', author: 'Wakuwaku', url: world.sprite, version: 2, codex: false }],
       now: payload(),
@@ -503,6 +559,58 @@
     },
     settings_open: ({ tab }) => later(() => emit('island:settings', { tab: tab || null })),
     settings_gallery: () => ({ ok: true, items: [], page: 1, totalPages: 1, total: 0 }),
+    // The dev servers her plugin found (examples/widgets/devserver.ps1), as
+    // the Rust side reads them: one running, one kept as stopped.
+    settings_devservers: () => ({
+      on: !!config().plugins?.devserver?.on,
+      servers: [
+        { port: 5173, name: 'node', project: 'D:\\work\\web', cmd: 'npm run dev', up: true },
+        { port: 3000, name: 'node', project: 'D:\\work\\web', cmd: 'npm run dev', up: false },
+      ],
+    }),
+    settings_devserver_start: () => ({ ok: true }),
+    // The calendar (settings.rs): events kept in the preview's world, the
+    // account as the page shows it, and a sync that finds everything already
+    // there. Nothing leaves the browser.
+    calendar_get: () => clone(world.calendar || []),
+    calendar_set: ({ events }) => {
+      world.calendar = clone(events || [])
+      return { ok: true }
+    },
+    calendar_export: () => ({ ok: true, path: 'data/calendar.ics' }),
+    calendar_import: () => ({ ok: true, events: [] }),
+    // ICS pasted into the import panel, parsed as settings.rs's ics_events
+    // does (SUMMARY, DTSTART, DTEND, RRULE, VALARM), so 「预览与检查」 lists
+    // what the real one would instead of throwing.
+    calendar_import_text: ({ text }) => ({ ok: true, events: fakeIcs(text || '') }),
+    calendar_account: () => ({ accounts: clone(world.calendarAccounts || []), active: world.calendarAccounts?.[0]?.id || '' }),
+    calendar_account_save: ({ account }) => {
+      const list = world.calendarAccounts || (world.calendarAccounts = [])
+      const id = account?.id || `acc-${Date.now()}`
+      const saved = { ...(account || {}), id }
+      const index = list.findIndex(a => a.id === id)
+      if (index >= 0) list[index] = saved
+      else list.push(saved)
+      return { ok: true, id }
+    },
+    calendar_account_select: () => ({ ok: true }),
+    calendar_account_remove: ({ id }) => {
+      world.calendarAccounts = (world.calendarAccounts || []).filter(a => a.id !== id)
+      return { ok: true, active: world.calendarAccounts[0]?.id || '' }
+    },
+    calendar_sync: () => ({
+      ok: true,
+      events: clone(world.calendar || []),
+      remote: (world.calendar || []).length,
+      calendars: 1,
+      pushed: 0,
+      updated: 0,
+      deleted: 0,
+      removed: [],
+      failed: 0,
+    }),
+    calendar_google_auth: () => ({ ok: false, error: 'Google OAuth is not run in the preview' }),
+    settings_open_external: () => ({ ok: true }),
     session_jump: () => true,
     pet_walk: () => false,
     pet_answer: ({ id }) => {

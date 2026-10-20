@@ -64,7 +64,7 @@
   // Its kinds, and which a plugin she runs is (scripts.rs PLUGINS); 组合:
   // the boards kept as combos (settings boardSets, a board's 存为组合…).
   const CATS = ['all', 'system', 'work', 'info', 'mail', 'script', 'sets']
-  const PLUGIN_CAT = { weather: 'info', stock: 'info', pomodoro: 'work', countdown: 'work', stretch: 'work', ci: 'script', devserver: 'script' }
+  const PLUGIN_CAT = { weather: 'info', stock: 'info', pomodoro: 'work', countdown: 'work', stretch: 'work', ci: 'script' }
   const BUILT_IN_CAT = { monitor: 'system', today: 'work', tokens: 'work' }
   // The spacers' marks (the layout's own parts, on the strip alone).
   const SPACER_MARK = {
@@ -157,12 +157,14 @@
     const out = []
     const builtIn = { monitor: 'card.monitor', today: 'card.today', tokens: 'widget.tokens' }
     for (const w of all.filter(x => x.builtIn)) out.push({ key: `widget:${w.id}`, kind: 'builtIn', cat: BUILT_IN_CAT[w.id] || 'system', w, name: T(builtIn[w.id] || 'taskbar.w.widget'), note: T(`picker.d.${w.id in BUILT_IN_CAT ? w.id : 'builtIn'}`) })
-    for (const p of snap?.plugins || []) out.push({ key: `plugin:${p.id}`, kind: 'plugin', cat: PLUGIN_CAT[p.id] || 'script', w: all.find(x => x.plugin === p.id) || null, plugin: p, name: T(`w.ex.${p.id}`), note: T(`w.ex.${p.id}.note`) })
+    // The dev-server plugin and the widgets it finds are not offered here:
+    // they are gone from the Plugins page too (the user, 2026-10-21).
+    for (const p of (snap?.plugins || []).filter(x => x.id !== 'devserver')) out.push({ key: `plugin:${p.id}`, kind: 'plugin', cat: PLUGIN_CAT[p.id] || 'script', w: all.find(x => x.plugin === p.id) || null, plugin: p, name: T(`w.ex.${p.id}`), note: T(`w.ex.${p.id}.note`) })
     for (const w of all.filter(x => x.from === 'mail')) {
       const label = Widgets.words(Isle.lang, w, detailed).label
       out.push({ key: `widget:${w.id}`, kind: 'mail', cat: 'mail', w, name: label ? `${T('card.mail')} · ${label}` : T('card.mail'), note: T('picker.d.mail') })
     }
-    for (const w of all.filter(x => x.from === 'script' && !x.plugin)) out.push({ key: `widget:${w.id}`, kind: 'script', cat: 'script', w, name: Widgets.words(Isle.lang, w, detailed).label || T('taskbar.w.widget'), note: T('picker.d.script') })
+    for (const w of all.filter(x => x.from === 'script' && !x.plugin && !String(x.id).startsWith('devserver-'))) out.push({ key: `widget:${w.id}`, kind: 'script', cat: 'script', w, name: Widgets.words(Isle.lang, w, detailed).label || T('taskbar.w.widget'), note: T('picker.d.script') })
     // The layout's spacers: the strip alone has them.
     if (home() === 'taskbar') for (const type of ['flex', 'gap', 'sep']) out.push({ key: `spacer:${type}`, kind: 'layout', cat: 'system', spacer: type, name: T(`taskbar.w.${type}`), note: T(`taskbar.lib.note.${type}`) })
     // The combos: a board each, to put up on the desktop again.

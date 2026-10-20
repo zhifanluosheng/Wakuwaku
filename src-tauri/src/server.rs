@@ -27,7 +27,7 @@ use serde_json::{json, Value};
 use tauri::Manager;
 use tiny_http::{Header, Request, Response, Server};
 
-use crate::{events, events_agy, events_codex, events_dsh, events_omp, events_opencode, events_zcode, island, jump, now_ms, pet, Responder, Shared};
+use crate::{events, events_agy, events_codex, events_dsh, events_omp, events_opencode, events_trae, events_workbuddy, events_zcode, island, jump, now_ms, pet, Responder, Shared};
 
 // Hook events carry whole files (an Edit's PostToolUse has the file before
 // the edit), so this is generous.
@@ -48,6 +48,8 @@ fn agent_of(url: &str) -> Option<&'static str> {
         "agent=opencode" => Some("opencode"),
         "agent=omp" => Some("omp"),
         "agent=zcode" => Some("zcode"),
+        "agent=trae" => Some("trae"),
+        "agent=workbuddy" => Some("workbuddy"),
         "agent=dsh" => Some("dsh"),
         _ => None,
     })
@@ -71,7 +73,7 @@ fn quit_of(url: &str) -> (crate::data::Quit, &'static str) {
 // from a hook in its sandbox: those she finds from the other end of the
 // connection (chain_for).
 fn brings_chain(agent: Option<&str>) -> bool {
-    matches!(agent, Some("codex" | "agy" | "zcode"))
+    matches!(agent, Some("codex" | "agy" | "zcode" | "trae" | "workbuddy"))
 }
 
 // True the first time a line comes; a few kinds are kept, and past them
@@ -112,6 +114,48 @@ fn read_json(req: &mut Request) -> Option<Value> {
     let mut bytes = Vec::new();
     req.as_reader().take(MAX_BODY).read_to_end(&mut bytes).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+// A URL's query, decoded: account=me%40example.test&uid=42.
+fn query_of(url: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    if let Some((_, query)) = url.split_once('?') {
+        for pair in query.split('&') {
+            if let Some((key, value)) = pair.split_once('=') {
+                out.insert(key.to_string(), percent(value));
+            }
+        }
+    }
+    out
+}
+
+fn percent(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                Ok(n) => {
+                    out.push(n);
+                    i += 3;
+                }
+                Err(_) => {
+                    out.push(b'%');
+                    i += 1;
+                }
+            },
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // The process chain of the session an event comes from, looked up when the
@@ -181,6 +225,8 @@ fn handle(sh: &Arc<Shared>, mut req: Request, is_debug: bool) {
                 Some("opencode") => &sh.opencode_seen,
                 Some("omp") => &sh.omp_seen,
                 Some("zcode") => &sh.zcode_seen,
+                Some("trae") => &sh.trae_seen,
+                Some("workbuddy") => &sh.workbuddy_seen,
                 Some("dsh") => &sh.dsh_seen,
                 _ => &sh.claude_seen,
             };
@@ -198,6 +244,8 @@ fn handle(sh: &Arc<Shared>, mut req: Request, is_debug: bool) {
                 Some("opencode") => events_opencode::to_message(&event),
                 Some("omp") => events_omp::to_message(&event),
                 Some("zcode") => events_zcode::to_message(&event),
+                Some("trae") => events_trae::to_message(&event),
+                Some("workbuddy") => events_workbuddy::to_message(&event),
                 Some("dsh") => events_dsh::to_message(&event, &crate::connection::dsh_home()),
                 _ => events::to_message(&event),
             };
@@ -325,6 +373,72 @@ fn handle(sh: &Arc<Shared>, mut req: Request, is_debug: bool) {
                 reply(req, 200, json!({ "ok": true, "arrived": arrived }));
             });
         }
+        // What she is following now, the mailboxes' newest letters and the dev
+        // servers she found: what the MCP server (mcp.rs) offers agents.
+        ("GET", "/sessions") => {
+            let now = now_ms();
+            let (top, list) = {
+                let pet = sh.pet.lock().unwrap();
+                (pet.get(now), pet.list())
+            };
+            reply(req, 200, json!({ "now": top, "sessions": list }))
+        }
+        ("GET", "/mail") => reply(req, 200, crate::mail::view(sh)),
+        ("GET", "/devservers") => reply(req, 200, crate::settings::dev_servers(sh)),
+        ("POST", "/devservers/start") => match read_json(&mut req) {
+            Some(v) => {
+                let port = v["port"].as_u64().unwrap_or(0) as u16;
+                let ok = port != 0 && crate::settings::start_devserver(sh, port);
+                reply(req, 200, json!({ "ok": ok }))
+            }
+            None => reply(req, 400, json!({ "error": "bad json" })),
+        },
+        // The calendar as an agent sees it: a day's agenda (repeats expanded),
+        // and one event added from a session.
+        ("GET", "/calendar") => {
+            let q = query_of(req.url());
+            let date = q.get("date").cloned().unwrap_or_default();
+            reply(req, 200, crate::settings::calendar_agenda(sh, &date))
+        }
+        ("POST", "/calendar/add") => match read_json(&mut req) {
+            Some(v) => match crate::settings::calendar_add(sh, &v) {
+                Ok(got) => reply(req, 200, got),
+                Err(why) => reply(req, 400, json!({ "error": why })),
+            },
+            None => reply(req, 400, json!({ "error": "bad json" })),
+        },
+        ("POST", "/calendar/update") => match read_json(&mut req) {
+            Some(v) => match crate::settings::calendar_update(sh, &v) {
+                Ok(got) => reply(req, 200, got),
+                Err(why) => reply(req, 400, json!({ "error": why })),
+            },
+            None => reply(req, 400, json!({ "error": "bad json" })),
+        },
+        ("POST", "/calendar/delete") => match read_json(&mut req) {
+            Some(v) => match crate::settings::calendar_delete(sh, &v) {
+                Ok(got) => reply(req, 200, got),
+                Err(why) => reply(req, 400, json!({ "error": why })),
+            },
+            None => reply(req, 400, json!({ "error": "bad json" })),
+        },
+        ("GET", "/mail/letter") => {
+            let q = query_of(req.url());
+            let account = q.get("account").cloned().unwrap_or_default();
+            let uid = q.get("uid").and_then(|u| u.parse().ok()).unwrap_or(0);
+            if account.is_empty() || uid == 0 {
+                return reply(req, 400, json!({ "error": "account and uid are wanted" }));
+            }
+            let folder = q.get("folder").cloned();
+            let got = tauri::async_runtime::block_on(crate::mail::letters::mail_letter(sh.app.clone(), account, uid, folder));
+            reply(req, 200, got)
+        }
+        ("POST", "/mail/send") => match read_json(&mut req) {
+            Some(letter) => {
+                let got = tauri::async_runtime::block_on(crate::mail::send::mail_send(sh.app.clone(), letter));
+                reply(req, 200, got)
+            }
+            None => reply(req, 400, json!({ "error": "bad json" })),
+        },
         _ => reply(req, 404, json!({ "error": "not found" })),
     }
 }

@@ -89,6 +89,19 @@
     { id: 'today', builtIn: true, from: 'builtIn', on: true, icon: 'today', color: '#34d27b', label: { key: 'widget.today' }, value: { key: 'widget.todayValue', vars: { turns: '197', time: '2:01', approvals: '3' } }, detail: { sizes: ['s', 'm', 'l'], series: { points: hours, unit: 'turns' } } },
     { id: 'tokens', builtIn: true, from: 'builtIn', on: true, icon: 'code', color: '#ff9f0a', label: { key: 'widget.tokens' }, value: { key: 'widget.tokensValue', vars: { total: '1.7B', output: '3.4M' } } },
     {
+      id: 'music', builtIn: true, from: 'builtIn', on: true, icon: 'music', color: '#ff6b9d',
+      label: { key: 'widget.music' }, value: { key: 'widget.musicValue', vars: { player: 'Spotify', song: 'Anti-Hero' } },
+      detail: {
+        sizes: ['s', 'm', 'l'], extra: 'Taylor Swift',
+        rows: [
+          { kind: 'lyric', text: 'I have this thing where I get older but just never wiser' },
+          { kind: 'lyric', text: 'Midnights become my afternoons' },
+          { kind: 'lyric', text: 'When my depression works the graveyard shift, all of the people' },
+          { kind: 'lyric', text: "I've ghosted stand there in the room" },
+        ],
+      },
+    },
+    {
       id: 'weather', plugin: 'weather', from: 'script', on: true, icon: 'weather', color: '#ffb340', label: 'Dresden · 阴', value: '11°',
       detail: {
         sizes: ['s', 'm', 'l'], extra: '8°~16°',

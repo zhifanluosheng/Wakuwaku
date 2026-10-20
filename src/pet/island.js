@@ -135,7 +135,7 @@
   // picture from the new corner for a frame or two, and the island jumped
   // sideways as she was pulled out or taken back.
   const BASE = { width: 760, height: 132 }
-  const TOP = 8
+  const TOP = 12
   // Her two sizes: the round portrait in the compact island, and her whole
   // self (one sheet cell, halved) standing in the open one.
   const HEAD = 24
@@ -1041,17 +1041,31 @@
     if (on && !was && isOn() && home() === 'taskbar') window.pet.raise()
   }
 
+  // A page turned in the settings: the box takes the new size in the frame
+  // the page is drawn in, not sprung into over half a second around content
+  // that has just been made (the trail of that spring read as a flicker).
+  // Set for the one update it is for.
+  let snapSize = false
+  const snapNext = () => {
+    snapSize = true
+  }
+
   // Returns true when the window has to grow first.
   function setRoom(next) {
     const size = r => r || baseRoom()
     clearTimeout(roomTimer)
-    if (JSON.stringify(next) === JSON.stringify(room)) return false
+    if (JSON.stringify(next) === JSON.stringify(room)) {
+      snapSize = false
+      return false
+    }
     const grows = size(next).width > size(room).width || size(next).height > size(room).height
     const apply = () => {
       room = next
       window.pet.panel(next)
     }
-    if (grows) apply()
+    // Turned, not grown into: the window takes it at once either way (the
+    // panel is already the new width, so nothing of it is cut off).
+    if (grows || snapSize) apply()
     else roomTimer = setTimeout(apply, SPRING_MS)
     return grows
   }
@@ -1367,7 +1381,16 @@
 
   function sizeOf(name) {
     const withHer = isHome()
-    if (name === 'settings') return { width: window.Settings.layer.offsetWidth || SETTINGS_W, height: window.Settings.layer.offsetHeight }
+    if (name === 'settings') {
+      // The width the page wants, not the one it is at: the page's width
+      // changes with the page (the Mail page in two panes is wider), and it
+      // changes with a spring, so the width it is at while the spring runs
+      // is not the one the window is to be. The window is made for the width
+      // it is going to be, and the panel grows into it. Zero is the narrow
+      // one (SETTINGS_W).
+      const want = window.Settings.width?.()
+      return { width: (Number.isFinite(want) && want > 0 ? want : SETTINGS_W), height: window.Settings.layer.offsetHeight }
+    }
     if (name === 'ask') {
       return {
         width: panel.offsetWidth + 28 + (withHer ? 108 : 0),
@@ -1515,7 +1538,7 @@
   // the volume, in its own icon font (.fi: Segoe Fluent Icons).
   const quickBox = el('span', 'tquick')
   quickBox.dataset.bar = 'quick'
-  const NET = { wired: '', wifi: '', other: '', none: '' }
+  const NET = { wired: '', wifi: '', other: '', none: '' }
   const netMark = el('span', 'fi net')
   // The volume as Windows draws it: the speaker's three waves faint, those up
   // to the volume solid over them; struck through, muted.
@@ -2560,6 +2583,8 @@
   function openWidgetSettings(w) {
     if (w.from === 'mail') return window.pet.openSettings('mail')
     const key = w.plugin || w.id
+    // The calendar widget has a page of its own, not a plugin's row.
+    if (key === 'calendar') return window.pet.openSettings('calendar')
     if (w.plugin || key === 'monitor') window.Settings?.openPlugin?.(key)
     window.pet.openSettings(key ? `widgets:${key}` : 'widgets')
   }
@@ -4813,7 +4838,15 @@
       // Where it is, for the plate under it to stay covered as it changes.
       const from = resized && plateSent ? island.getBoundingClientRect() : null
       const fromRadius = from ? parseFloat(getComputedStyle(island).borderTopLeftRadius) : 0
+      // A page turned: the box at its new size now (see snapSize).
+      const snapping = snapSize
+      if (snapping) island.classList.add('snap-size')
       setSize(want)
+      if (snapping) {
+        void island.offsetWidth
+        island.classList.remove('snap-size')
+        snapSize = false
+      }
       const snap = isHome() && !herShown
       if (snap) her.classList.add('snap')
       placeHer(want)
@@ -4827,7 +4860,9 @@
       placeNews()
       placeFlow()
     }
-    if (grows) setTimeout(grow, 40)
+    // A page turned: the box takes it at once, with the window (snapSize);
+    // otherwise the window has its room first, then the island grows in it.
+    if (grows) setTimeout(grow, snapSize ? 0 : 40)
     else if (late) {
       hidePlate(PLATE_OUT_MS)
       setTimeout(grow, late)
@@ -5804,5 +5839,5 @@
     compact,
     expanded,
   }
-  window.Island = { accent: () => look.accent || null, isOn, changed: update, reach, absorb, settingsMax, tbPresets: TB_PRESETS, tbPreset: () => presetOf(config.taskbarLayout), tbWithPreset: name => TB_PRESETS[name] && Widgets.withParts(TB_PRESETS[name], tbLayout(config.taskbarLayout)), editTaskbar, whereOf, placeWidget, placeNow }
+  window.Island = { accent: () => look.accent || null, isOn, changed: update, snap: snapNext, reach, absorb, settingsMax, tbPresets: TB_PRESETS, tbPreset: () => presetOf(config.taskbarLayout), tbWithPreset: name => TB_PRESETS[name] && Widgets.withParts(TB_PRESETS[name], tbLayout(config.taskbarLayout)), editTaskbar, whereOf, placeWidget, placeNow }
 })()

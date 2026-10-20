@@ -26,6 +26,8 @@ function snapshot(change = {}) {
     opencode: { plugin: 'missing', file: 'C:\\Users\\me\\.config\\opencode\\plugins\\wakuwaku.js', fileShown: '~\\.config\\opencode\\plugins\\wakuwaku.js', seen: false },
     omp: block('missing', { more: 0 }),
     zcode: block('missing'),
+    trae: block('missing'),
+    workbuddy: block('missing'),
     dsh: block('missing', { listShown: 'D:\\wakuwaku-data\\dsh-hooks.json' }),
     mailAgents: { claude: true, codex: true, agy: false },
     agentVersions: { claude: '2.1.296', zcode: '3.15.3', dsh: '0.2.0-rc.2', opencode: null, omp: null },
@@ -33,13 +35,13 @@ function snapshot(change = {}) {
     ...change,
   }
 }
-const absent = { codex: { hooks: 'absent' }, agy: { hooks: 'absent' }, opencode: { plugin: 'absent' }, omp: { hooks: 'absent' }, zcode: { hooks: 'absent' }, dsh: { hooks: 'absent' } }
+const absent = { codex: { hooks: 'absent' }, agy: { hooks: 'absent' }, opencode: { plugin: 'absent' }, omp: { hooks: 'absent' }, zcode: { hooks: 'absent' }, trae: { hooks: 'absent' }, workbuddy: { hooks: 'absent' }, dsh: { hooks: 'absent' } }
 
 test('each agent in the table is whole, and its words are there in both languages', () => {
   const bridge = read('src/pet/bridge.js')
   const sites = read('src-tauri/src/settings.rs')
   const keys = new Set()
-  assert.equal(Agents.TABLE.length, 7)
+  assert.equal(Agents.TABLE.length, 9)
   for (const a of Agents.TABLE) {
     assert.match(a.id, /^[a-z]+$/)
     assert.ok(a.name, a.id)
@@ -103,11 +105,11 @@ test('what she can do is what the code does', () => {
 
 test('found here or not', () => {
   const snap = snapshot()
-  assert.deepEqual(Agents.here(snap), ['claude', 'codex', 'agy', 'opencode', 'omp', 'zcode', 'dsh'])
+  assert.deepEqual(Agents.here(snap), ['claude', 'codex', 'agy', 'opencode', 'omp', 'zcode', 'trae', 'workbuddy', 'dsh'])
   assert.deepEqual(Agents.elsewhere(snap), [])
   const none = snapshot({ claudeHere: false, ...absent })
   assert.deepEqual(Agents.here(none), [])
-  assert.deepEqual(Agents.elsewhere(none), ['claude', 'codex', 'agy', 'opencode', 'omp', 'zcode', 'dsh'])
+  assert.deepEqual(Agents.elsewhere(none), ['claude', 'codex', 'agy', 'opencode', 'omp', 'zcode', 'trae', 'workbuddy', 'dsh'])
   // Claude Code's folder gone, its plugin still on: here.
   assert.deepEqual(Agents.here(snapshot({ claudeHere: false, connection: 'plugin', ...absent })), ['claude'])
   // Only OpenCode and ZCode.
@@ -200,17 +202,17 @@ test('the files, as each reads them', () => {
 
 test('Connect all, and General’s line', () => {
   const snap = snapshot({ connection: 'plugin', codex: { hooks: 'ok', seen: false }, agy: { hooks: 'stale' }, ...{ omp: { hooks: 'absent' } } })
-  // Here and not connected: OpenCode, ZCode, DeepSeek Harness (agy is to repair, omp is not here).
-  assert.deepEqual(Agents.toConnect(snap), ['opencode', 'zcode', 'dsh'])
+  // Here and not connected: OpenCode, ZCode, Trae, DeepSeek Harness (agy is to repair, omp is not here).
+  assert.deepEqual(Agents.toConnect(snap), ['opencode', 'zcode', 'trae', 'workbuddy', 'dsh'])
   // One being written is not offered again; one that failed is.
-  assert.deepEqual(Agents.toConnect(snap, { busy: 'zcode', failed: { dsh: { kind: 'locked' } } }), ['opencode', 'dsh'])
+  assert.deepEqual(Agents.toConnect(snap, { busy: 'zcode', failed: { dsh: { kind: 'locked' } } }), ['opencode', 'trae', 'workbuddy', 'dsh'])
   // Codex written, to be trusted: connected, and wanting the person (as agy's repair).
   const s = Agents.summary(snap)
   assert.deepEqual(s.on, ['claude'])
   assert.deepEqual(s.set, [])
   assert.deepEqual(s.connected, ['claude', 'codex'])
   assert.deepEqual(s.wants, ['codex', 'agy'])
-  assert.deepEqual(s.none, ['opencode', 'zcode', 'dsh'])
+  assert.deepEqual(s.none, ['opencode', 'zcode', 'trae', 'workbuddy', 'dsh'])
   // A file unreadable and a write that failed want the person too.
   const more = Agents.summary(snapshot({ zcode: { hooks: 'unreadable' }, omp: { hooks: 'ok' } }), { failed: { dsh: { kind: 'locked' } } })
   assert.deepEqual(more.wants, ['zcode', 'dsh'])
