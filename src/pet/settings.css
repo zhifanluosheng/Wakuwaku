@@ -592,6 +592,11 @@
   width: 120px;
 }
 
+#island-settings .calform [data-calreminddays][hidden],
+#island-settings .calform [data-calremindunit][hidden] {
+  display: none;
+}
+
 #island-settings .calgrid .cd.out {
   color: var(--g4);
   opacity: 0.45;

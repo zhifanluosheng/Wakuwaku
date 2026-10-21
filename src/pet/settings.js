@@ -1048,15 +1048,47 @@
     return false
   }
   const calOf = day => (calEvents || []).filter(e => calOn(e, day)).sort((a, b) => String(a.start || '').localeCompare(String(b.start || '')))
+  // A reminder in the person's words: days (0 is the event's own time) or
+  // the older minutes.
+  const calDaysText = n => (Number(n) === 1 ? T('cal.remindOneDay') : T('cal.remindDays', { n }))
+  const calRemindText = e => {
+    if (!e) return ''
+    if (e.remindDays !== undefined && e.remindDays !== null && Number.isFinite(Number(e.remindDays))) {
+      const days = Number(e.remindDays)
+      return days === 0 ? T('cal.remindSameDay') : calDaysText(days)
+    }
+    return Number(e.remind) > 0 ? T('cal.remindBefore', { n: Number(e.remind) }) : ''
+  }
+  // The form's choices: day settings first, then the old minute ones, and a
+  // box for any number of days.
+  const calRemindOptions = () => {
+    const hasDays = calEdit?.remindDays !== undefined && calEdit?.remindDays !== null && Number.isFinite(Number(calEdit.remindDays))
+    const days = hasDays ? Number(calEdit.remindDays) : null
+    const minutes = hasDays ? 0 : Number(calEdit.remind || 0)
+    const dayChoices = [0, 1, 2, 3, 7]
+    const minuteChoices = [5, 10, 15, 30, 60]
+    if (minutes > 0 && !minuteChoices.includes(minutes)) minuteChoices.push(minutes)
+    const chosen = hasDays ? (dayChoices.includes(days) ? `d${days}` : 'dcustom') : minutes > 0 ? `m${minutes}` : 'none'
+    return {
+      chosen,
+      days,
+      custom: chosen === 'dcustom',
+      html: [
+        `<option value="none"${chosen === 'none' ? ' selected' : ''}>${esc(T('cal.remindNone'))}</option>`,
+        ...dayChoices.map(n => `<option value="d${n}"${chosen === `d${n}` ? ' selected' : ''}>${esc(n === 0 ? T('cal.remindSameDay') : calDaysText(n))}</option>`),
+        `<option value="dcustom"${chosen === 'dcustom' ? ' selected' : ''}>${esc(T('cal.remindCustom'))}</option>`,
+        ...minuteChoices.map(n => `<option value="m${n}"${chosen === `m${n}` ? ' selected' : ''}>${esc(T('cal.remindBefore', { n }))}</option>`),
+      ].join(''),
+    }
+  }
   // The week view's arithmetic, from calweek.js. The block's top, its length
   // and where a drop or a grip puts it are all its arithmetic, so the three
   // ways of moving an event cannot disagree.
   const { HOUR_PX, SNAP, min: calMin, pxToMin: calPxToMin, minToPx: calMinToPx } = CalWeek
-  // Which event an id names, among everything kept.
   // Which event an id names, among everything kept. The account says which
-// one, when the same event is in two.
-const calById = (id, account) =>
-  (calEvents || []).find(e => String(e.id) === String(id) && (account === undefined || String(e.account || '') === String(account || '')))
+  // one, when the same event is in two.
+  const calById = (id, account) =>
+    (calEvents || []).find(e => String(e.id) === String(id) && (account === undefined || String(e.account || '') === String(account || '')))
   // An event's identity among all the accounts: the account it is in and its
   // own id. The same event may be in two accounts (copied to both), so the
   // id alone does not say which one, and merging by it alone would let one
@@ -1209,7 +1241,7 @@ const calById = (id, account) =>
     const rows = dayList.length
       ? dayList
           .map(
-            e => `<div class="r"><div class="grow"><div class="devtitle"><b>${esc(e.title || '')}</b><span class="devmeta">${esc([e.start, e.end].filter(Boolean).join('–'))}</span>${e.repeat && e.repeat !== 'none' ? `<span class="devmeta">${esc(T(`cal.repeat.${e.repeat}`))}</span>` : ''}${e.remind ? `<span class="devmeta">${esc(T('cal.remindBefore', { n: e.remind }))}</span>` : ''}${e.calendar ? `<span class="devmeta">${esc(e.calendar)}</span>` : ''}</div>${extra(e)}</div><button class="pbtn sm" data-caledit="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}">${esc(T('cal.edit'))}</button><button class="pbtn sm" data-caldel="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}">${esc(T('cal.delete'))}</button></div>`,
+            e => `<div class="r"><div class="grow"><div class="devtitle"><b>${esc(e.title || '')}</b><span class="devmeta">${esc([e.start, e.end].filter(Boolean).join('–'))}</span>${e.repeat && e.repeat !== 'none' ? `<span class="devmeta">${esc(T(`cal.repeat.${e.repeat}`))}</span>` : ''}${calRemindText(e) ? `<span class="devmeta">${esc(calRemindText(e))}</span>` : ''}${e.calendar ? `<span class="devmeta">${esc(e.calendar)}</span>` : ''}</div>${extra(e)}</div><button class="pbtn sm" data-caledit="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}">${esc(T('cal.edit'))}</button><button class="pbtn sm" data-caldel="${esc(String(e.id))}" data-calacc="${esc(String(e.account || ''))}">${esc(T('cal.delete'))}</button></div>`,
           )
           .join('')
       : `<div class="note">${esc(T('cal.empty'))}</div>`
@@ -1246,6 +1278,7 @@ const calById = (id, account) =>
         .join('')
     })()
     const activeAcc = (calAccounts || []).find(a => a.id === calActiveId)
+    const reminder = calEdit ? calRemindOptions() : null
     const form = calEdit
       ? `<div class="grp calform">
         <div class="r"><input class="in" data-caltitle placeholder="${esc(T('cal.fieldTitle'))}" value="${esc(calEdit.title || '')}" maxlength="120"></div>
@@ -1253,7 +1286,7 @@ const calById = (id, account) =>
         <div class="r"><span class="d">${esc(T('cal.start'))}</span><input class="in t" type="time" data-calstart value="${esc(calEdit.start || '09:00')}"><span class="d">${esc(T('cal.end'))}</span><input class="in t" type="time" data-calend value="${esc(calEdit.end || '10:00')}"></div>
         <div class="r"><span class="d">${esc(T('cal.repeat'))}</span><select class="in" data-calrepeat>${['none', 'daily', 'weekly', 'monthly'].map(r => `<option value="${r}"${(calEdit.repeat || 'none') === r ? ' selected' : ''}>${esc(T(`cal.repeat.${r}`))}</option>`).join('')}</select></div>
         <div class="r"><span class="d">${esc(T('cal.kind'))}</span><select class="in" data-calkind>${['meeting', 'personal', 'holiday', 'review'].map(k => `<option value="${k}"${(calEdit.kind || 'meeting') === k ? ' selected' : ''}>${esc(T(`cal.kind.${k}`))}</option>`).join('')}</select></div>
-        <div class="r"><span class="d">${esc(T('cal.remind'))}</span><select class="in" data-calremind>${[0, 5, 10, 15, 30, 60].map(n => `<option value="${n}"${Number(calEdit.remind || 0) === n ? ' selected' : ''}>${esc(n ? T('cal.remindBefore', { n }) : T('cal.remindNone'))}</option>`).join('')}</select></div>
+        <div class="r"><span class="d">${esc(T('cal.remind'))}</span><select class="in" data-calremind>${reminder.html}</select><input class="in t" type="number" min="0" max="365" step="1" inputmode="numeric" data-calreminddays value="${esc(reminder.days === null ? '' : String(reminder.days))}" placeholder="0–365" title="${esc(T('cal.remindDaysHint'))}"${reminder.custom ? '' : ' hidden'}><span class="d" data-calremindunit${reminder.custom ? '' : ' hidden'}>${esc(T('cal.remindDaysUnit'))}</span></div>
         <div class="r"><span class="d">${esc(T('cal.place'))}</span><input class="in" data-calwhere value="${esc(calEdit.where || '')}" maxlength="120"></div>
         <div class="r"><span class="d">${esc(T('cal.link'))}</span><input class="in" data-callink value="${esc(calEdit.url || '')}" maxlength="300"></div>
         <div class="r"><input class="in" data-calnote placeholder="${esc(T('cal.fieldNote'))}" value="${esc(calEdit.note || '')}" maxlength="200"></div>
@@ -3474,6 +3507,11 @@ const calById = (id, account) =>
   // does not redraw under the pointer.
   let calSearchTimer = 0
   layer.addEventListener('input', e => {
+    const days = e.target.closest?.('[data-calreminddays]')
+    if (days) {
+      days.setCustomValidity('')
+      return
+    }
     const box = e.target.closest?.('[data-calsearch]')
     if (!box) return
     clearTimeout(calSearchTimer)
@@ -3485,6 +3523,18 @@ const calById = (id, account) =>
   })
   // A provider picked in the connection modal: its fields at once.
   layer.addEventListener('change', e => {
+    const remind = e.target.closest?.('[data-calremind]')
+    if (remind) {
+      const custom = remind.value === 'dcustom'
+      const box = document.querySelector('#island-settings [data-calreminddays]')
+      const unit = document.querySelector('#island-settings [data-calremindunit]')
+      if (box) {
+        box.hidden = !custom
+        if (custom) box.focus()
+      }
+      if (unit) unit.hidden = !custom
+      return
+    }
     const file = e.target.closest?.('[data-calicsfile]')
     if (file) {
       const chosen = file.files?.[0]
@@ -3841,6 +3891,24 @@ const calById = (id, account) =>
     }
     if (at('[data-calsave]')) {
       const val = sel => document.querySelector(`#island-settings ${sel}`)?.value || ''
+      const remindChoice = val('[data-calremind]') || 'none'
+      let remind = 0
+      let remindDays = null
+      if (remindChoice === 'dcustom') {
+        const box = document.querySelector('#island-settings [data-calreminddays]')
+        const raw = Number(box?.value)
+        if (!Number.isFinite(raw) || raw < 0 || raw > 365) {
+          box?.setCustomValidity(T('cal.remindInvalid'))
+          box?.reportValidity()
+          return
+        }
+        box?.setCustomValidity('')
+        remindDays = Math.round(raw)
+      } else if (remindChoice.startsWith('d')) {
+        remindDays = Number(remindChoice.slice(1))
+      } else if (remindChoice.startsWith('m')) {
+        remind = Number(remindChoice.slice(1)) || 0
+      }
       const e = {
         ...(calEdit || {}),
         id: calEdit?.id || Date.now(),
@@ -3851,11 +3919,13 @@ const calById = (id, account) =>
         end: val('[data-calend]'),
         repeat: val('[data-calrepeat]') || 'none',
         kind: val('[data-calkind]') || 'meeting',
-        remind: Number(val('[data-calremind]') || 0) || 0,
+        remind,
+        ...(remindDays === null ? {} : { remindDays }),
         note: val('[data-calnote]').trim(),
         where: val('[data-calwhere]').trim(),
         url: val('[data-callink]').trim(),
       }
+      if (remindDays === null) delete e.remindDays
       if (!e.title) return document.querySelector('#island-settings [data-caltitle]')?.focus()
       calEdit = null
       // This one event in this account: another account's copy of the same

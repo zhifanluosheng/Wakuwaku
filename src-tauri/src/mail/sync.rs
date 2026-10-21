@@ -33,7 +33,7 @@ use serde_json::json;
 use super::imap::{self, session, Fail, Session};
 use super::proxy;
 use super::store::{self, Entry, Folder, Offline, Store};
-use super::{password_of, show, Account, Watch, CONNECT, IDLE_FOR, POLL};
+use super::{code, password_of, show, Account, Watch, CONNECT, IDLE_FOR, POLL};
 use crate::{now_ms, Shared};
 
 // The header fields a letter is kept by.
@@ -91,7 +91,7 @@ pub fn run(sh: &Arc<Shared>, account: &Account, watch: &Watch) {
                         sync_folder(sh, &mut conn, &st, Folder::Inbox, Mailbox::Inbox)?;
                         true
                     } else {
-                        look_new(sh, &mut conn, &st)?
+                        look_new(sh, &mut conn, &st, newest_seen.unwrap_or(0))?
                     };
                     tell(sh, account, watch, &st, "ok", &mut newest_seen);
                     if left == 0 && !came {
@@ -279,11 +279,14 @@ fn download(sh: &Shared, conn: &mut Session, st: &Mutex<Store>, watch: &Watch, s
 
 // New mail in the inbox since the newest kept (UID SEARCH UID n:*), by its
 // header fields; whether there was any.
-fn look_new(sh: &Shared, conn: &mut Session, st: &Mutex<Store>) -> Result<bool, Fail> {
+fn look_new(sh: &Arc<Shared>, conn: &mut Session, st: &Mutex<Store>, since: u32) -> Result<bool, Fail> {
     conn.folder(Mailbox::Inbox, false)?;
     let newest = st.lock().unwrap().inbox.letters.keys().next_back().copied().unwrap_or(0);
     let mut new = conn.newer(newest)?;
     new.sort_unstable_by(|a, b| b.cmp(a));
     heads(sh, conn, st, Folder::Inbox, &new)?;
+    if !new.is_empty() {
+        code::new_mail(sh, conn, st, &new, since);
+    }
     Ok(!new.is_empty())
 }

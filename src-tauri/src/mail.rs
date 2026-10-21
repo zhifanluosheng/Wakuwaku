@@ -46,6 +46,7 @@ use tauri::AppHandle;
 use crate::{i18n, now_ms, settings, shared, Shared};
 
 pub mod agent;
+mod code;
 mod discover;
 mod imap;
 pub mod letters;

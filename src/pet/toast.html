@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>wakuwaku notice</title>
+    <link rel="stylesheet" href="toast.css" />
+  </head>
+  <body>
+    <!-- A calendar event or a letter's verification code, in the screen's
+         bottom-right corner. Never takes the focus; clicks go through it
+         (toast.rs sets the window click-through). -->
+    <div id="toast" class="toast" aria-live="polite"></div>
+    <script src="toast.js"></script>
+  </body>
+</html>

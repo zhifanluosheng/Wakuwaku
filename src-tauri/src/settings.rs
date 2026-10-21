@@ -1938,7 +1938,7 @@ fn event_broken(e: &Value) -> bool {
 
 fn event_sig(e: &Value) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
         e["date"].as_str().unwrap_or(""),
         e["start"].as_str().unwrap_or(""),
         e["end"].as_str().unwrap_or(""),
@@ -1948,6 +1948,7 @@ fn event_sig(e: &Value) -> String {
         e["url"].as_str().unwrap_or(""),
         e["repeat"].as_str().unwrap_or("none"),
         e["remind"].as_u64().unwrap_or(0),
+        e["remindDays"].as_u64().map(|n| n.to_string()).unwrap_or_default(),
     )
 }
 
@@ -2007,7 +2008,124 @@ fn occurs_on(e: &Value, ty: i64, tm: i64, td: i64) -> bool {
     }
 }
 
-fn remind_due(sh: &crate::Shared) {
+// Days since 1970 back to a date (Howard Hinnant's civil_from_days, as
+// crash.rs and widgets.rs have it).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (y + i64::from(m <= 2), m, d)
+}
+
+fn date_string(days: i64) -> String {
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+    days_from_civil(ny, nm, 1) - days_from_civil(y, m, 1)
+}
+
+// The next month with that day in it: a monthly event on the 31st has no
+// occurrence in a 30-day month, nor in February.
+fn next_month_day(day: i64, wanted: i64) -> Option<i64> {
+    let (mut y, mut m, _) = civil_from_days(day);
+    for _ in 0..240 {
+        m += 1;
+        if m > 12 {
+            m = 1;
+            y += 1;
+        }
+        if wanted <= days_in_month(y, m) {
+            return Some(days_from_civil(y, m, wanted));
+        }
+    }
+    None
+}
+
+// The first day this event is on, on or after today, in days since 1970.
+fn next_day(e: &Value, today: i64) -> Option<i64> {
+    let (y, m, d) = e["date"].as_str().and_then(parse_date)?;
+    let from = days_from_civil(y, m, d);
+    match e["repeat"].as_str().unwrap_or("none") {
+        "daily" => Some(today.max(from)),
+        "weekly" => {
+            if today <= from {
+                Some(from)
+            } else {
+                Some(from + ((today - from + 6) / 7) * 7)
+            }
+        }
+        "monthly" => {
+            if from >= today {
+                return Some(from);
+            }
+            let mut day = from;
+            for _ in 0..240 {
+                day = next_month_day(day, d)?;
+                if day >= today {
+                    return Some(day);
+                }
+            }
+            None
+        }
+        _ => (from >= today).then_some(from),
+    }
+}
+
+// An occurrence and the instant it begins: a timed event at its clock time,
+// an all-day one at 09:00 (the hour a calendar on a phone uses for it).
+struct Due {
+    date: String,
+    start: String,
+    at: i64,
+}
+
+// The next occurrence that has not already begun, or, for the reminder set
+// for the event's own time, one that began within its grace (an hour, or the
+// rest of an all-day event's day) so a check every twenty seconds cannot
+// step over it.
+fn next_occurrence(e: &Value, today: i64, midnight: i64, now: i64, remind_days: i64) -> Option<Due> {
+    let (_, _, d) = e["date"].as_str().and_then(parse_date)?;
+    let repeat = e["repeat"].as_str().unwrap_or("none");
+    let all_day = e["start"].as_str().unwrap_or("").trim().is_empty();
+    let (h, min) = if all_day { (9, 0) } else { e["start"].as_str().and_then(parse_time).unwrap_or((9, 0)) };
+    let start_min = h * 60 + min;
+    let grace = if remind_days != 0 {
+        0
+    } else if all_day {
+        86_400_000 - start_min * 60_000
+    } else {
+        3_600_000
+    };
+    let mut day = next_day(e, today)?;
+    for _ in 0..400 {
+        let at = midnight + (day - today) * 86_400_000 + start_min * 60_000;
+        if at + grace > now {
+            return Some(Due {
+                date: date_string(day),
+                start: if all_day { String::new() } else { format!("{h:02}:{min:02}") },
+                at,
+            });
+        }
+        day = match repeat {
+            "daily" => day + 1,
+            "weekly" => day + 7,
+            "monthly" => next_month_day(day, d)?,
+            _ => return None,
+        };
+    }
+    None
+}
+
+fn remind_due(sh: &std::sync::Arc<crate::Shared>) {
     let Ok(text) = std::fs::read_to_string(sh.dir.join("calendar.json")) else { return };
     let Ok(Value::Array(events)) = serde_json::from_str::<Value>(&text) else { return };
     if events.is_empty() {
@@ -2015,7 +2133,10 @@ fn remind_due(sh: &crate::Shared) {
     }
     let today = crate::widgets::local_date();
     let Some((ty, tm, td)) = parse_date(&today) else { return };
-    let minutes = (crate::now_ms().saturating_sub(crate::widgets::local_midnight()) / 60_000) as i64;
+    let today_days = days_from_civil(ty, tm, td);
+    let midnight = crate::widgets::local_midnight() as i64;
+    let now = crate::now_ms() as i64;
+    let minutes = (now.saturating_sub(midnight) / 60_000) as i64;
     let path = sh.dir.join("calendar-notified.json");
     let mut sent: Vec<String> = std::fs::read_to_string(&path)
         .ok()
@@ -2023,6 +2144,43 @@ fn remind_due(sh: &crate::Shared) {
         .unwrap_or_default();
     let mut added = false;
     for e in &events {
+        let id = e["id"].as_str().unwrap_or("");
+        let title = e["title"].as_str().unwrap_or("");
+        // The person's own setting, in days: 0 is the event's own time, n is
+        // n days before it, and absent leaves the older minute setting.
+        if let Some(days) = e["remindDays"].as_u64().map(|d| d.min(365) as i64) {
+            let Some(due) = next_occurrence(e, today_days, midnight, now, days) else { continue };
+            let remind_at = due.at - days * 86_400_000;
+            if now < remind_at {
+                continue;
+            }
+            let key = format!("{id}@{}@d{days}", due.date);
+            if sent.contains(&key) {
+                continue;
+            }
+            crate::toast::calendar(sh, &due.date, &due.start, &title);
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in key.bytes() {
+                hash ^= b as u64;
+                hash = hash.wrapping_mul(0x100_0000_01b3);
+            }
+            let widget = json!({
+                "id": format!("cal-{hash:x}"),
+                "icon": "calendar",
+                "color": "#5e9bff",
+                "label": if sh.lang() == "en" { "Reminder" } else { "日程提醒" },
+                "value": title,
+                "detail": { "extra": if due.start.is_empty() { due.date.clone() } else { due.start.clone() } },
+                "ttl": 1200,
+                "nudge": true,
+            });
+            let _ = sh.put_widget(&widget);
+            sh.log(&format!("calendar: reminded {key}"));
+            sent.push(key);
+            added = true;
+            continue;
+        }
+        // The earlier setting: minutes before a timed event today.
         let remind = e["remind"].as_u64().unwrap_or(0).min(10_080) as i64;
         if remind == 0 {
             continue;
@@ -2035,31 +2193,30 @@ fn remind_due(sh: &crate::Shared) {
         if minutes < start - remind || minutes >= start {
             continue;
         }
-        let key = format!("{}@{}", e["id"].as_str().unwrap_or(""), today);
+        let key = format!("{id}@{today}");
         if sent.contains(&key) {
             continue;
         }
+        crate::toast::calendar(sh, &today, &format!("{h:02}:{m:02}"), &title);
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for b in key.bytes() {
             hash ^= b as u64;
             hash = hash.wrapping_mul(0x100_0000_01b3);
         }
-        let title: String = e["title"].as_str().unwrap_or("").chars().take(24).collect();
         let widget = json!({
             "id": format!("cal-{hash:x}"),
             "icon": "calendar",
             "color": "#5e9bff",
             "label": if sh.lang() == "en" { "Reminder" } else { "日程提醒" },
             "value": title,
-            "detail": { "extra": e["start"].as_str().unwrap_or("") },
+            "detail": { "extra": format!("{h:02}:{m:02}") },
             "ttl": 1200,
             "nudge": true,
         });
-        if sh.put_widget(&widget).is_ok() {
-            sh.log(&format!("calendar: reminded {key}"));
-            sent.push(key);
-            added = true;
-        }
+        let _ = sh.put_widget(&widget);
+        sh.log(&format!("calendar: reminded {key}"));
+        sent.push(key);
+        added = true;
     }
     if added {
         if sent.len() > 200 {
@@ -2157,11 +2314,15 @@ fn event_from_input(input: &Value) -> Result<Value, String> {
     if !matches!(repeat, "none" | "daily" | "weekly" | "monthly") {
         return Err("repeat: none, daily, weekly or monthly".into());
     }
-    let remind = input["remind"].as_u64().unwrap_or(0).min(10_080);
+    let remind_days = input["remindDays"]
+        .as_u64()
+        .or_else(|| input["remindDays"].as_str().and_then(|s| s.trim().parse().ok()))
+        .map(|d| d.min(365));
+    let remind = if remind_days.is_some() { 0 } else { input["remind"].as_u64().unwrap_or(0).min(10_080) };
     let note: String = input["note"].as_str().unwrap_or("").trim().chars().take(200).collect();
     let place: String = input["where"].as_str().unwrap_or("").trim().chars().take(120).collect();
     let link: String = input["url"].as_str().unwrap_or("").trim().chars().take(300).collect();
-    Ok(json!({
+    let mut event = json!({
         "date": date,
         "start": start,
         "end": end,
@@ -2171,7 +2332,11 @@ fn event_from_input(input: &Value) -> Result<Value, String> {
         "url": link,
         "repeat": repeat,
         "remind": remind,
-    }))
+    });
+    if let Some(days) = remind_days {
+        event["remindDays"] = json!(days);
+    }
+    Ok(event)
 }
 
 fn same_id(e: &Value, id: &str) -> bool {
@@ -2188,9 +2353,19 @@ fn input_id(input: &Value) -> Result<String, String> {
 
 fn apply_update(old: &Value, input: &Value) -> Result<Value, String> {
     let mut merged = old.clone();
-    for key in ["title", "date", "start", "end", "note", "where", "url", "repeat", "remind"] {
+    for key in ["title", "date", "start", "end", "note", "where", "url", "repeat", "remind", "remindDays"] {
         if let Some(given) = input.get(key) {
             merged[key] = given.clone();
+        }
+    }
+    // One setting replaces the other: days when days are given, minutes when
+    // minutes are. An update that names only one clears what the other left.
+    if input.get("remindDays").is_some() && input.get("remind").is_none() {
+        merged["remind"] = json!(0);
+    }
+    if input.get("remind").is_some() && input.get("remindDays").is_none() {
+        if let Some(object) = merged.as_object_mut() {
+            object.remove("remindDays");
         }
     }
     let mut event = event_from_input(&merged)?;
@@ -2722,27 +2897,29 @@ fn trigger_minutes(v: &str) -> Option<u64> {
             num = num * 10 + (c as u64 - '0' as u64);
         } else {
             match c {
+                'W' => total += num * 10_080,
                 'D' => total += num * 1440,
                 'H' => total += num * 60,
                 'M' => total += num,
+                'S' => total += num / 60,
                 _ => {}
             }
-            any |= matches!(c, 'D' | 'H' | 'M');
+            any |= matches!(c, 'W' | 'D' | 'H' | 'M' | 'S');
             num = 0;
         }
     }
-    (any && total > 0).then_some(total)
+    any.then_some(total)
 }
 
 fn ics_events(text: &str) -> Vec<Value> {
     let mut out = Vec::new();
     let mut in_event = false;
-    let mut remind: u64 = 0;
+    let mut trigger = String::new();
     let mut ev: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for line in ics_unfold(text) {
         if line == "BEGIN:VEVENT" {
             in_event = true;
-            remind = 0;
+            trigger.clear();
             ev.clear();
             continue;
         }
@@ -2766,7 +2943,14 @@ fn ics_events(text: &str) -> Vec<Value> {
                     })
                     .unwrap_or("none");
                 let id = ev.get("UID").cloned().filter(|u| !u.is_empty()).unwrap_or_else(|| format!("ics-{}", out.len()));
-                out.push(json!({
+                // A trigger in whole days becomes the person's day setting;
+                // anything finer stays in minutes.
+                let (remind, remind_days) = match trigger_minutes(&trigger) {
+                    Some(minutes) if minutes % 1440 == 0 => (0, Some(minutes / 1440)),
+                    Some(minutes) => (minutes, None),
+                    None => (0, None),
+                };
+                let mut event = json!({
                     "id": id,
                     "date": date,
                     "start": start,
@@ -2777,7 +2961,11 @@ fn ics_events(text: &str) -> Vec<Value> {
                     "url": ev.get("URL").map(|s| s.trim().to_string()).unwrap_or_default(),
                     "repeat": repeat,
                     "remind": remind,
-                }));
+                });
+                if let Some(days) = remind_days.filter(|d| *d <= 365) {
+                    event["remindDays"] = json!(days);
+                }
+                out.push(event);
             }
             continue;
         }
@@ -2786,8 +2974,10 @@ fn ics_events(text: &str) -> Vec<Value> {
         }
         if let Some((key, value)) = line.split_once(':') {
             let key = key.split(';').next().unwrap_or("").to_uppercase();
-            if key == "TRIGGER" && remind == 0 {
-                remind = trigger_minutes(value).unwrap_or(0);
+            // A calendar may carry an absolute alarm first and a relative
+            // one after it; the relative one is the one we can keep.
+            if key == "TRIGGER" && (trigger.is_empty() || (trigger_minutes(&trigger).is_none() && trigger_minutes(value).is_some())) {
+                trigger = value.to_string();
             }
             ev.insert(key, value.to_string());
         }
@@ -2829,7 +3019,17 @@ fn ics_fields(e: &Value) -> Vec<String> {
         Some("monthly") => out.push("RRULE:FREQ=MONTHLY".to_string()),
         _ => {}
     }
-    if let Some(remind) = e["remind"].as_u64().filter(|n| *n > 0 && *n <= 10_080) {
+    if let Some(days) = e["remindDays"].as_u64().filter(|n| *n <= 365) {
+        out.push("BEGIN:VALARM".to_string());
+        out.push("ACTION:DISPLAY".to_string());
+        out.push("DESCRIPTION:Wakuwaku".to_string());
+        if days == 0 {
+            out.push("TRIGGER:PT0M".to_string());
+        } else {
+            out.push(format!("TRIGGER:-P{days}D"));
+        }
+        out.push("END:VALARM".to_string());
+    } else if let Some(remind) = e["remind"].as_u64().filter(|n| *n > 0 && *n <= 10_080) {
         out.push("BEGIN:VALARM".to_string());
         out.push("ACTION:DISPLAY".to_string());
         out.push("DESCRIPTION:Wakuwaku".to_string());
@@ -3332,6 +3532,8 @@ END:VCALENDAR</c:calendar-data>
         assert_eq!(super::trigger_minutes("-PT10M"), Some(10));
         assert_eq!(super::trigger_minutes("-PT1H30M"), Some(90));
         assert_eq!(super::trigger_minutes("P1D"), Some(1440));
+        assert_eq!(super::trigger_minutes("P1W"), Some(10080));
+        assert_eq!(super::trigger_minutes("PT0M"), Some(0));
         assert_eq!(super::trigger_minutes("20261027T090000Z"), None);
         let ics = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261027T090000\r\nSUMMARY:x\r\nBEGIN:VALARM\r\nTRIGGER:-PT15M\r\nACTION:DISPLAY\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
         let events = super::ics_events(ics);
@@ -3339,6 +3541,88 @@ END:VCALENDAR</c:calendar-data>
         let back = super::ics_for(&events);
         assert!(back.contains("TRIGGER:-PT15M"));
         assert!(back.contains("BEGIN:VALARM"));
+        // An absolute alarm before the relative one is skipped for the latter.
+        let two = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a2\r\nDTSTART:20261027T090000\r\nSUMMARY:x\r\nBEGIN:VALARM\r\nTRIGGER:20261027T085000Z\r\nACTION:DISPLAY\r\nEND:VALARM\r\nBEGIN:VALARM\r\nTRIGGER:-PT30M\r\nACTION:DISPLAY\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let events = super::ics_events(two);
+        assert_eq!(events[0]["remind"], 30);
+    }
+
+    // A trigger in whole days is the person's day setting, and the other way
+    // around: an alarm at the event's own time is day 0, not "no reminder".
+    #[test]
+    fn day_alarms_become_days_and_back() {
+        let raw = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:b\r\nDTSTART:20261027T090000\r\nSUMMARY:x\r\nBEGIN:VALARM\r\nTRIGGER:-P2D\r\nACTION:DISPLAY\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let events = super::ics_events(raw);
+        assert_eq!(events[0]["remindDays"], 2);
+        assert_eq!(events[0]["remind"], 0);
+        let back = super::ics_for(&events);
+        assert!(back.contains("TRIGGER:-P2D"));
+
+        let on_time = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:c\r\nDTSTART:20261027T090000\r\nSUMMARY:x\r\nBEGIN:VALARM\r\nTRIGGER:PT0M\r\nACTION:DISPLAY\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let events = super::ics_events(on_time);
+        assert_eq!(events[0]["remindDays"], 0);
+        assert!(super::ics_for(&events).contains("TRIGGER:PT0M"));
+    }
+
+    #[test]
+    fn an_event_from_an_agent_takes_days_not_minutes() {
+        let event = super::event_from_input(&json!({
+            "title": "x",
+            "date": "2026-10-27",
+            "start": "09:00",
+            "remind": 30,
+            "remindDays": 3,
+        }))
+        .unwrap();
+        assert_eq!(event["remindDays"], 3);
+        assert_eq!(event["remind"], 0);
+
+        let old = json!({ "id": 1, "date": "2026-10-27", "start": "09:00", "title": "x", "remind": 0, "remindDays": 3 });
+        let changed = super::apply_update(&old, &json!({ "remind": 15 })).unwrap();
+        assert_eq!(changed["remind"], 15);
+        assert!(changed.get("remindDays").is_none());
+    }
+
+    // The day a reminder comes due: the event day itself (0), or that many
+    // days before; an all-day event is at 09:00, as a phone's calendar has it.
+    #[test]
+    fn a_day_reminder_is_due_on_its_own_day_or_before() {
+        let today = super::days_from_civil(2026, 10, 21);
+        let midnight = today * 86_400_000;
+        let hour = 3_600_000;
+        let event = json!({ "date": "2026-10-28", "start": "09:00", "title": "x", "repeat": "none" });
+        let due = super::next_occurrence(&event, today, midnight, midnight + 8 * hour, 7).unwrap();
+        assert_eq!(due.date, "2026-10-28");
+        assert_eq!(due.start, "09:00");
+        let remind_at = due.at - 7 * 86_400_000;
+        assert_eq!(remind_at, midnight + 9 * hour);
+        assert!(midnight + 8 * hour < remind_at);
+        assert!(midnight + 9 * hour >= remind_at);
+
+        let all_day = json!({ "date": "2026-10-21", "start": "", "title": "x", "repeat": "none" });
+        let due = super::next_occurrence(&all_day, today, midnight, midnight + 10 * hour, 0).unwrap();
+        assert_eq!(due.date, "2026-10-21");
+        assert_eq!(due.start, "");
+        assert_eq!(due.at, midnight + 9 * hour);
+        // Its day is over at midnight, not at 09:00 the next morning.
+        assert!(super::next_occurrence(&all_day, today + 1, midnight + 86_400_000, midnight + 32 * hour, 0).is_none());
+
+        let timed = json!({ "date": "2026-10-21", "start": "09:00", "title": "x", "repeat": "none" });
+        assert!(super::next_occurrence(&timed, today, midnight, midnight + 10 * hour + 30 * 60_000, 0).is_none());
+    }
+
+    #[test]
+    fn a_repeat_finds_the_occurrence_the_reminder_belongs_to() {
+        let today = super::days_from_civil(2026, 10, 21);
+        let midnight = today * 86_400_000;
+        let weekly = json!({ "date": "2026-10-19", "start": "09:00", "title": "x", "repeat": "weekly" });
+        let due = super::next_occurrence(&weekly, today, midnight, midnight + 10 * 3_600_000, 7).unwrap();
+        assert_eq!(due.date, "2026-10-26");
+
+        let monthly = json!({ "date": "2026-01-31", "start": "09:00", "title": "x", "repeat": "monthly" });
+        let feb = super::days_from_civil(2026, 2, 1);
+        let due = super::next_occurrence(&monthly, feb, feb * 86_400_000, feb * 86_400_000, 0).unwrap();
+        assert_eq!(due.date, "2026-03-31");
     }
 
     #[test]

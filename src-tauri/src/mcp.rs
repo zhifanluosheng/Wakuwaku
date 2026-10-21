@@ -116,7 +116,7 @@ fn tools() -> Value {
         },
         {
             "name": "wakuwaku_calendar",
-            "description": "The events on one day of Wakuwaku's calendar (today by default), repeats expanded: id, date, start, end, title, note, repeat and remind.",
+            "description": "The events on one day of Wakuwaku's calendar (today by default), repeats expanded: id, date, start, end, title, note, repeat, remind and remindDays.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "date": { "type": "string", "description": "YYYY-MM-DD; today when empty" } },
@@ -137,6 +137,7 @@ fn tools() -> Value {
                     "url": { "type": "string", "description": "A link (http/https)" },
                     "repeat": { "type": "string", "description": "none (default), daily, weekly, monthly" },
                     "remind": { "type": "number", "description": "minutes before; 0 for none" },
+                    "remindDays": { "type": "number", "description": "days before, 0 for the event's own time; replaces remind when given" },
                 },
                 "required": ["title"],
             },
@@ -157,6 +158,7 @@ fn tools() -> Value {
                     "url": { "type": "string", "description": "A link (http/https)" },
                     "repeat": { "type": "string", "description": "none, daily, weekly, monthly" },
                     "remind": { "type": "number", "description": "minutes before; 0 for none" },
+                    "remindDays": { "type": "number", "description": "days before, 0 for the event's own time; replaces remind when given" },
                 },
                 "required": ["id"],
             },

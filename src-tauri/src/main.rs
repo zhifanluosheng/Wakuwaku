@@ -95,6 +95,7 @@ mod systray;
 mod taskbar;
 mod tasks;
 mod theme;
+mod toast;
 mod tokens;
 mod tray;
 mod updates;
@@ -1629,6 +1630,8 @@ fn main() {
             settings::settings_workbuddy_hooks,
             settings::settings_dsh_hooks,
             settings::settings_cpu_sensors,
+            toast::toast_ready,
+            toast::toast_hide,
             bars::bar_ready,
             desk::desk_ready,
             desk::desk_shapes,
@@ -1773,6 +1776,9 @@ fn main() {
             taskbar::recover(&sh);
 
             pet::create(&sh)?;
+            // The bottom-right notices (toast.rs): calendar reminders and
+            // letters' verification codes.
+            toast::init(&sh);
             // Windows' own taskbar's pinned programs, once: hers seeded from
             // them, those she kept before after them (pins.rs).
             if !sh.flag("taskbarPinsImported") {
