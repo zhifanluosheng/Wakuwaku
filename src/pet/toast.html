@@ -11,8 +11,9 @@
   </head>
   <body>
     <!-- A calendar event or a letter's verification code, in the screen's
-         bottom-right corner. Never takes the focus; clicks go through it
-         (toast.rs sets the window click-through). -->
+         bottom-right corner. Never takes the focus. A calendar notice passes
+         clicks through; a code notice is interactive so its code can be
+         copied (toast.rs switches this as each notice is drawn). -->
     <div id="toast" class="toast" aria-live="polite"></div>
     <script src="toast.js"></script>
   </body>

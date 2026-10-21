@@ -2,10 +2,11 @@
 // event due, and a new letter that carries a verification code.
 //
 // They are a window of their own, laid over the work area's bottom-right
-// corner (above Windows' taskbar), always on top, never taking the focus
-// and click-through: what is underneath stays usable while one shows. The
-// page queues them (toast.js) and, once the queue is empty, asks this side
-// to hide the window until the next one.
+// corner (above Windows' taskbar), always on top and never taking the focus.
+// A calendar notice stays click-through; a code notice takes the mouse so
+// its code can be copied, and the page asks for that only while it shows.
+// The page queues them (toast.js) and, once the queue is empty, asks this
+// side to hide the window until the next one.
 //
 // The chime is a short WAV kept in the exe; Windows plays it through
 // winmm's PlaySound. There is no setting for it yet: the person asked for
@@ -19,8 +20,12 @@ use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, Webvie
 use crate::Shared;
 
 const LABEL: &str = "toast";
-const WIDTH: f64 = 400.0;
-const HEIGHT: f64 = 160.0;
+const WIDTH: f64 = 420.0;
+// The page measures its card and asks for the height it needs; this is the
+// height the window is made at, and the first one before that measurement.
+const HEIGHT: f64 = 210.0;
+const MIN_HEIGHT: f64 = 180.0;
+const MAX_HEIGHT: f64 = 320.0;
 const MARGIN: f64 = 16.0;
 
 static WINDOW: Mutex<Option<WebviewWindow>> = Mutex::new(None);
@@ -35,17 +40,33 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 // own toast carries the rest (it has no avatar, but the words arrive).
 static BROKEN: AtomicBool = AtomicBool::new(false);
 
-// A calendar event is due: its date (and time, when it has one) and what
-// it is. The page writes the date in the person's language and shape.
-pub fn calendar(sh: &Arc<Shared>, date: &str, start: &str, title: &str) {
+// A calendar event is due: what it is, when, where, and how it was set to
+// remind. The page writes the date in the person's language and shape.
+#[allow(clippy::too_many_arguments)]
+pub fn calendar(
+    sh: &Arc<Shared>,
+    date: &str,
+    start: &str,
+    end: &str,
+    title: &str,
+    location: &str,
+    repeat: &str,
+    remind_days: Option<u64>,
+    remind_minutes: Option<u64>,
+) {
     show(
         sh,
         json!({
             "kind": "calendar",
             "date": date,
             "start": start,
+            "end": end,
             "allDay": start.trim().is_empty(),
             "title": title,
+            "where": location,
+            "repeat": repeat,
+            "remindDays": remind_days,
+            "remind": remind_minutes,
             "lang": sh.lang(),
         }),
     );
@@ -164,6 +185,112 @@ pub fn toast_hide(window: WebviewWindow, seq: u64) {
     }
 }
 
+// Only a code notice wants the mouse (to copy its code). The page calls this
+// as each notice is drawn, so the next calendar notice goes back to passing
+// clicks through the window.
+#[tauri::command]
+pub fn toast_interactive(window: WebviewWindow, on: bool) {
+    if window.label() == LABEL {
+        let _ = window.set_ignore_cursor_events(!on);
+    }
+}
+
+// The page has measured its card: the window takes just that height and
+// stays at the work area's bottom-right corner.
+#[tauri::command]
+pub fn toast_fit(window: WebviewWindow, height: f64) {
+    if window.label() == LABEL && height.is_finite() {
+        place_height(&window, height.clamp(MIN_HEIGHT, MAX_HEIGHT));
+    }
+}
+
+// The page's own clipboard call can be refused in a window that never takes
+// the focus; Windows' clipboard is set directly then. Elsewhere the page
+// falls back to its document copy.
+#[tauri::command]
+pub fn toast_copy(window: WebviewWindow, text: String) -> bool {
+    if window.label() != LABEL {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        copy_text(&text)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = text;
+        false
+    }
+}
+
+#[cfg(windows)]
+fn copy_text(text: &str) -> bool {
+    use std::ffi::c_void;
+    use std::time::Duration;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn OpenClipboard(hwnd: *mut c_void) -> i32;
+        fn EmptyClipboard() -> i32;
+        fn SetClipboardData(format: u32, mem: *mut c_void) -> *mut c_void;
+        fn CloseClipboard() -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+        fn GlobalLock(mem: *mut c_void) -> *mut c_void;
+        fn GlobalUnlock(mem: *mut c_void) -> i32;
+        fn GlobalFree(mem: *mut c_void) -> *mut c_void;
+    }
+
+    const CF_UNICODETEXT: u32 = 13;
+    const GMEM_MOVEABLE: u32 = 0x0002;
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = wide.len() * std::mem::size_of::<u16>();
+
+    // Another program may hold the clipboard for a moment.
+    let mut opened = false;
+    for _ in 0..8 {
+        // SAFETY: no window owns this clipboard session; it is closed below.
+        if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
+            opened = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    if !opened {
+        return false;
+    }
+
+    let mut copied = false;
+    // SAFETY: the handle is moveable, filled while locked, and then either
+    // handed to the clipboard (which owns it) or freed here.
+    unsafe {
+        let _ = EmptyClipboard();
+        let handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if handle.is_null() {
+            let _ = CloseClipboard();
+            return false;
+        }
+        let at = GlobalLock(handle) as *mut u16;
+        if at.is_null() {
+            let _ = GlobalFree(handle);
+            let _ = CloseClipboard();
+            return false;
+        }
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), at, wide.len());
+        let _ = GlobalUnlock(handle);
+        if SetClipboardData(CF_UNICODETEXT, handle).is_null() {
+            let _ = GlobalFree(handle);
+        } else {
+            copied = true;
+        }
+        let _ = CloseClipboard();
+    }
+    copied
+}
+
 fn flush() {
     if !READY.load(Ordering::SeqCst) {
         return;
@@ -186,10 +313,14 @@ fn flush() {
 // The work area's bottom-right corner, clear of the taskbar, in physical
 // pixels: the monitor the island is on (the main one), as Windows gives it.
 fn place(win: &WebviewWindow) {
+    place_height(win, HEIGHT);
+}
+
+fn place_height(win: &WebviewWindow, height: f64) {
     let screens = crate::screen::read(win.app_handle());
     let Some(area) = screens.primary.or_else(|| screens.areas.first().copied()) else { return };
     let width = (WIDTH * area.sf).round() as u32;
-    let height = (HEIGHT * area.sf).round() as u32;
+    let height = (height * area.sf).round() as u32;
     let margin = (MARGIN * area.sf).round() as i32;
     let x = area.x + area.w - width as i32 - margin;
     let y = area.y + area.h - height as i32 - margin;

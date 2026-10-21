@@ -2146,6 +2146,9 @@ fn remind_due(sh: &std::sync::Arc<crate::Shared>) {
     for e in &events {
         let id = e["id"].as_str().unwrap_or("");
         let title = e["title"].as_str().unwrap_or("");
+        let end = e["end"].as_str().unwrap_or("");
+        let location = e["where"].as_str().unwrap_or("");
+        let repeat = e["repeat"].as_str().unwrap_or("none");
         // The person's own setting, in days: 0 is the event's own time, n is
         // n days before it, and absent leaves the older minute setting.
         if let Some(days) = e["remindDays"].as_u64().map(|d| d.min(365) as i64) {
@@ -2158,7 +2161,17 @@ fn remind_due(sh: &std::sync::Arc<crate::Shared>) {
             if sent.contains(&key) {
                 continue;
             }
-            crate::toast::calendar(sh, &due.date, &due.start, &title);
+            crate::toast::calendar(
+                sh,
+                &due.date,
+                &due.start,
+                end,
+                &title,
+                location,
+                repeat,
+                Some(days as u64),
+                None,
+            );
             let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
             for b in key.bytes() {
                 hash ^= b as u64;
@@ -2197,7 +2210,17 @@ fn remind_due(sh: &std::sync::Arc<crate::Shared>) {
         if sent.contains(&key) {
             continue;
         }
-        crate::toast::calendar(sh, &today, &format!("{h:02}:{m:02}"), &title);
+        crate::toast::calendar(
+            sh,
+            &today,
+            &format!("{h:02}:{m:02}"),
+            end,
+            &title,
+            location,
+            repeat,
+            None,
+            Some(remind as u64),
+        );
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for b in key.bytes() {
             hash ^= b as u64;
