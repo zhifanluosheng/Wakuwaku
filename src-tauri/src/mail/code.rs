@@ -61,7 +61,7 @@ const NOT_A_CODE: &[&str] = &[
     "price", "amount", "total", "balance", "cvv", "cvc", "referral", "invite", "invitation", "voucher", "gift", "qr",
     "area code", "code of conduct", "订单", "单号", "编号", "电话", "手机", "传真", "邮编", "快递",
     "物流", "运单", "优惠", "折扣", "价格", "金额", "余额", "发票", "卡号", "账号", "座位", "航班", "$", "¥", "￥", "usd",
-    "cny",
+    "cny", "checkout", "redeem", "claim", "offer", "bonus", "%",
 ];
 
 #[derive(Clone)]
@@ -146,6 +146,10 @@ fn detect_with(raw: &str, subject: bool, after: usize) -> Option<String> {
     let mut best: Option<(i32, String)> = None;
     for candidate in candidates {
         if beside_address(&chars, &candidate) {
+            continue;
+        }
+        // A number in a link or a tracking address is the link's, not a code.
+        if in_link(&chars, &candidate) {
             continue;
         }
         // A year is not a verification code, however near the words it is.
@@ -318,6 +322,24 @@ fn beside_address(chars: &[char], candidate: &Candidate) -> bool {
     (candidate.at > 0 && chars[candidate.at - 1] == '@') || (candidate.end < chars.len() && chars[candidate.end] == '@')
 }
 
+fn in_link(chars: &[char], candidate: &Candidate) -> bool {
+    let edge = |c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '"' | '\'' | '，' | '。' | '、');
+    let mut from = candidate.at;
+    while from > 0 && !edge(chars[from - 1]) {
+        from -= 1;
+    }
+    let mut to = candidate.end;
+    while to < chars.len() && !edge(chars[to]) {
+        to += 1;
+    }
+    let token: String = chars[from..to].iter().collect::<String>().to_lowercase();
+    token.contains("://")
+        || token.starts_with("www.")
+        || (token.contains('/') && token.contains('.'))
+        || (token.contains('?') && token.contains('='))
+        || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".html", ".php"].iter().any(|ext| token.contains(ext))
+}
+
 fn is_year(candidate: &Candidate) -> bool {
     candidate.letters == 0
         && candidate.digits == 4
@@ -404,6 +426,8 @@ mod tests {
         assert_eq!(find_code("", "Our code of conduct for 2026 is here"), None);
         assert_eq!(find_code("", "The verification code era in 2026 is here"), None);
         assert_eq!(find_code("", "Use referral code 482913"), None);
+        assert_eq!(find_code("", "Enter code MICA10 at checkout to claim the additional 10% discount."), None);
+        assert_eq!(find_code("", "Claude Code hacks: https://magic.beehiiv.com/v1/5f7ce6e3-9a71-416b-99a7"), None);
     }
 
     #[test]
